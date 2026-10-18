@@ -1,0 +1,1007 @@
+<title>Load Bearing</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: ops console in three panes — level rail | live topology + telemetry | component rack. Orthogonal "circuit" wiring on the canvas. */
+:root{
+  --bg:#e9eeeb; --panel:#f8faf8; --sunk:#dfe6e2; --ink:#13232a; --muted:#56686c; --line:#c6d1cd;
+  --accent:#c2570f; --accent-ink:#ffffff; --write:#3b5bd6; --ok:#1d8448; --warn:#a86b0c; --bad:#c2332a;
+  --wire:#a3b4b0; --grid:#d7dfdb;
+  --f-display:"Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+  --f-body:"Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono:"JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --r:6px;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#0d1619; --panel:#132126; --sunk:#0a1215; --ink:#e1eae7; --muted:#8ba0a3; --line:#24363c;
+  --accent:#f09a45; --accent-ink:#1c1104; --write:#8ea6ff; --ok:#4cc38a; --warn:#e5b34f; --bad:#ff6d60;
+  --wire:#3b5057; --grid:#16252a; color-scheme:dark } }
+:root[data-theme="dark"]{
+  --bg:#0d1619; --panel:#132126; --sunk:#0a1215; --ink:#e1eae7; --muted:#8ba0a3; --line:#24363c;
+  --accent:#f09a45; --accent-ink:#1c1104; --write:#8ea6ff; --ok:#4cc38a; --warn:#e5b34f; --bad:#ff6d60;
+  --wire:#3b5057; --grid:#16252a; color-scheme:dark }
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.5;
+  padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(16px, env(safe-area-inset-right, 0px));padding-block:18px 40px}
+button{font:inherit;color:inherit}
+button:focus-visible, input:focus-visible, select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mono{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+
+header.top{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;max-width:1440px;margin:0 auto 16px}
+.brand{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.brand h1{font-family:var(--f-display);font-weight:800;font-size:clamp(26px,3.2vw,36px);letter-spacing:-.02em;margin:0;line-height:1}
+.brand h1 span{color:var(--accent)}
+.brand p{margin:0;color:var(--muted);font-size:14px}
+.progress{font-family:var(--f-mono);font-size:12px;color:var(--muted);letter-spacing:.04em}
+
+.shell{display:grid;grid-template-columns:210px minmax(0,1fr) 300px;gap:16px;max-width:1440px;margin:0 auto;align-items:start}
+.pane{background:var(--panel);border:1px solid var(--line);border-radius:var(--r)}
+.label{font-family:var(--f-mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+
+/* level rail */
+.rail{padding:12px;display:flex;flex-direction:column;gap:4px;position:sticky;top:calc(env(safe-area-inset-top, 0px) + 12px)}
+.rail .label{padding:4px 8px 8px}
+.lvl{display:grid;grid-template-columns:26px minmax(0,1fr) auto;align-items:center;gap:8px;text-align:left;background:none;border:1px solid transparent;border-radius:5px;padding:8px;cursor:pointer}
+.lvl:hover:not(:disabled){background:var(--sunk)}
+.lvl[aria-current="true"]{border-color:var(--accent);background:var(--sunk)}
+.lvl:disabled{opacity:.45;cursor:not-allowed}
+.lvl .n{font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+.lvl .t{font-weight:700;font-size:14px;line-height:1.2;min-width:0}
+.lvl .t small{display:block;font-weight:400;color:var(--muted);font-size:12px}
+.stars{font-size:12px;letter-spacing:1px;color:var(--accent);white-space:nowrap}
+.stars .off{color:var(--line)}
+
+/* center */
+.center{display:flex;flex-direction:column;gap:16px;min-width:0}
+.brief{padding:18px 20px;display:flex;flex-direction:column;gap:12px}
+.brief h2{font-family:var(--f-display);font-weight:700;font-size:clamp(22px,2.4vw,28px);letter-spacing:-.01em;margin:0;text-wrap:balance;line-height:1.1}
+.brief .story{margin:0;max-width:68ch}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-family:var(--f-mono);font-size:12px;padding:4px 8px;border-radius:4px;background:var(--sunk);border:1px solid var(--line);white-space:nowrap;font-variant-numeric:tabular-nums}
+.chip b{font-weight:600;color:var(--ink)}
+.chip.goal{border-color:var(--accent);color:var(--ink)}
+.hint{border-left:3px solid var(--accent);padding:8px 12px;background:var(--sunk);border-radius:0 4px 4px 0;margin:0;max-width:68ch}
+.sandbox{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px 16px}
+.sandbox label{display:flex;flex-direction:column;gap:2px;font-size:13px}
+.sandbox label span{display:flex;justify-content:space-between;gap:8px}
+.sandbox input[type=range]{width:100%;accent-color:var(--accent)}
+.sandbox .check{flex-direction:row;align-items:center;gap:8px}
+
+.stage{position:relative;overflow:hidden}
+.stage canvas{display:block;width:100%;height:clamp(300px,42vw,440px)}
+.stagebar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 12px;border-top:1px solid var(--line)}
+.btn{border:1px solid var(--line);background:var(--panel);border-radius:5px;padding:8px 14px;cursor:pointer;font-weight:700;font-size:14px}
+.btn:hover:not(:disabled){border-color:var(--ink)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.primary:hover:not(:disabled){filter:brightness(1.07);border-color:var(--accent)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:5px;overflow:hidden}
+.seg button{border:0;background:none;padding:8px 10px;cursor:pointer;font-family:var(--f-mono);font-size:12px}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.spacer{flex:1}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
+
+.tele{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.tile{background:var(--panel);padding:10px 12px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.tile .v{font-family:var(--f-mono);font-size:20px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.2}
+.tile .sub{font-size:12px;color:var(--muted);font-family:var(--f-mono)}
+.tile canvas{width:100%;height:28px;display:block;margin-top:4px}
+.v.ok{color:var(--ok)} .v.warn{color:var(--warn)} .v.bad{color:var(--bad)}
+
+.log{padding:10px 14px;font-family:var(--f-mono);font-size:12px;max-height:150px;overflow:auto;display:flex;flex-direction:column;gap:3px}
+.log div{display:grid;grid-template-columns:44px minmax(0,1fr);gap:8px}
+.log .ts{color:var(--muted)}
+.log .bad{color:var(--bad)} .log .ok{color:var(--ok)} .log .warn{color:var(--warn)}
+.log .empty{color:var(--muted);display:block}
+
+/* rack */
+.rack{padding:12px;display:flex;flex-direction:column;gap:8px;position:sticky;top:calc(env(safe-area-inset-top, 0px) + 12px)}
+.rack .label{padding:4px 4px 2px}
+.comp{display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px;border:1px solid var(--line);border-radius:5px;background:var(--panel)}
+.comp.locked{opacity:.42}
+.comp .tag{font-family:var(--f-mono);font-size:11px;font-weight:600;height:30px;display:grid;place-items:center;border:1.5px solid var(--ink);border-radius:4px}
+.comp .nm{font-weight:700;font-size:14px;line-height:1.2;display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
+.comp .nm .price{font-family:var(--f-mono);font-size:11px;color:var(--muted);font-weight:400}
+.comp .nm .new{font-family:var(--f-mono);font-size:10px;letter-spacing:.08em;background:var(--accent);color:var(--accent-ink);padding:1px 5px;border-radius:3px}
+.comp .d{font-size:12px;color:var(--muted);line-height:1.35;margin-top:2px}
+.step{display:flex;align-items:center;border:1px solid var(--line);border-radius:5px}
+.step button{width:28px;height:30px;border:0;background:none;cursor:pointer;font-size:16px;font-weight:700}
+.step button:disabled{opacity:.3;cursor:not-allowed}
+.step output{min-width:22px;text-align:center;font-family:var(--f-mono);font-size:14px;font-weight:600}
+.budget{padding:10px 4px 2px;display:flex;flex-direction:column;gap:6px}
+.budget .row{display:flex;justify-content:space-between;align-items:baseline;font-family:var(--f-mono);font-size:13px}
+.budget .row b{font-size:18px}
+.bar{height:6px;background:var(--sunk);border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--ok);transition:width .2s}
+.bar i.over{background:var(--bad)}
+
+/* result overlay */
+.result{position:absolute;inset:0;background:color-mix(in srgb, var(--bg) 82%, transparent);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);max-width:620px;width:100%;padding:20px;display:flex;flex-direction:column;gap:12px;box-shadow:0 12px 40px rgba(0,0,0,.18);max-height:100%;overflow:auto}
+.card h3{font-family:var(--f-display);font-size:26px;margin:0;line-height:1.1}
+.card h3.pass{color:var(--ok)} .card h3.fail{color:var(--bad)}
+.checks{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:4px 10px;font-size:14px;align-items:baseline}
+.checks .m{font-family:var(--f-mono);font-variant-numeric:tabular-nums;text-align:right}
+.checks .y{color:var(--ok);font-weight:700} .checks .x{color:var(--bad);font-weight:700}
+.bigstars{font-size:26px;letter-spacing:4px;color:var(--accent)} .bigstars .off{color:var(--line)}
+.starkey{font-size:12px;color:var(--muted);margin:0}
+.diag{margin:0;font-size:14px;background:var(--sunk);padding:10px 12px;border-radius:4px}
+.row-actions{display:flex;gap:8px;flex-wrap:wrap}
+
+.lesson{padding:18px 20px;display:flex;flex-direction:column;gap:10px}
+.lesson h3{font-family:var(--f-display);font-size:22px;margin:0;line-height:1.15;text-wrap:balance}
+.lesson p{margin:0;max-width:70ch}
+.terms{display:grid;grid-template-columns:minmax(120px,max-content) minmax(0,1fr);gap:6px 14px;font-size:14px;margin:4px 0 0}
+.terms dt{font-weight:700} .terms dd{margin:0;color:var(--muted)}
+.interview{font-size:14px;border:1px dashed var(--accent);padding:10px 12px;border-radius:4px;max-width:70ch}
+.interview b{font-family:var(--f-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:2px}
+
+@media (max-width:1180px){
+  .shell{grid-template-columns:minmax(0,1fr) 290px}
+  .rail{grid-column:1 / -1;position:static;flex-direction:row;overflow-x:auto;padding:8px}
+  .rail .label{display:none}
+  .lvl{flex:0 0 auto;grid-template-columns:auto auto auto}
+  .lvl .t small{display:none}
+}
+@media (max-width:820px){
+  .shell{grid-template-columns:minmax(0,1fr)}
+  .rack{position:static}
+  .tele{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (prefers-reduced-motion: reduce){ .bar i{transition:none} }
+</style>
+
+<header class="top">
+  <div class="brand">
+    <h1>Load<span>/</span>Bearing</h1>
+    <p>Build the backend. Survive the traffic. Learn why each box exists.</p>
+  </div>
+  <div class="progress" id="progress"></div>
+</header>
+
+<div class="shell">
+  <nav class="pane rail" id="rail" aria-label="Levels"><div class="label">Incidents</div></nav>
+
+  <main class="center">
+    <section class="pane brief" id="brief"></section>
+
+    <section class="pane stage" id="stage">
+      <canvas id="topo" aria-label="Live diagram of your architecture with requests flowing through it"></canvas>
+      <div class="stagebar">
+        <button class="btn primary" id="runBtn">Run load test</button>
+        <button class="btn" id="skipBtn" disabled>Skip to end</button>
+        <div class="seg" role="group" aria-label="Simulation speed">
+          <button data-speed="3" aria-pressed="false">1×</button>
+          <button data-speed="6" aria-pressed="true">2×</button>
+          <button data-speed="14" aria-pressed="false">4×</button>
+        </div>
+        <span class="spacer"></span>
+        <div class="legend"><span><i style="background:var(--accent)"></i>read</span><span><i style="background:var(--write)"></i>write</span><span><i style="background:var(--ok)"></i>cache / edge hit</span><span><i style="background:var(--bad)"></i>failed</span></div>
+      </div>
+      <div class="result" id="result" hidden></div>
+    </section>
+
+    <section class="tele" id="tele">
+      <div class="tile"><span class="label">Traffic</span><span class="v" id="tRps">0</span><span class="sub" id="tRpsSub">req/s</span><canvas id="sRps"></canvas></div>
+      <div class="tile"><span class="label">p95 latency</span><span class="v" id="tP95">—</span><span class="sub" id="tP95Sub">target</span><canvas id="sP95"></canvas></div>
+      <div class="tile"><span class="label">Errors</span><span class="v" id="tErr">—</span><span class="sub" id="tErrSub">target</span><canvas id="sErr"></canvas></div>
+      <div class="tile"><span class="label">Queue lag</span><span class="v" id="tLag">—</span><span class="sub" id="tLagSub">writes waiting</span><canvas id="sLag"></canvas></div>
+    </section>
+
+    <section class="pane log" id="log" aria-live="polite"></section>
+
+    <section class="pane lesson" id="lessonBox" hidden></section>
+  </main>
+
+  <aside class="pane rack" id="rack" aria-label="Components"></aside>
+</div>
+
+<script>
+/*SIM-START*/
+const CAP = { app:1000, dbRead:1500, dbWrite:600, replica:1500, worker:250, cdnHit:0.95, queueMax:200000, cache:60000 };
+const LAT = { net:18, far:130, edge:14, lb:1, app:22, cache:1.5, db:9, ack:4 };
+const COST = { cdn:50, lb:20, app:70, cache:60, db:150, replica:100, queue:30, worker:40 };
+
+function costOf(cfg){ let c = 0; for (const k in COST) c += (cfg[k] || 0) * COST[k]; return c; }
+
+function trafficAt(sc, t){
+  let f = sc.ramp ? 0.3 + 0.7 * Math.min(1, t / (sc.T * 0.6)) : 1;
+  if (sc.burst > 1){
+    const on = (sc.spikes || []).some(([a, b]) => t >= a && t < b);
+    if (!on) f /= sc.burst;
+  }
+  return sc.rps * f;
+}
+
+function faultsAt(sc, t){
+  const fx = { appDown:false, dbDown:false, blip:false };
+  for (const f of sc.failures || []){
+    if (t >= f.at && t < f.until){
+      if (f.kind === 'app') fx.appDown = true;
+      else { fx.dbDown = true; if (t < f.at + 2) fx.blip = true; }
+    }
+  }
+  return fx;
+}
+
+const qwait = (base, rho) => base / (1 - Math.min(rho, 0.97));
+
+// One slice of time: where does every request go, how long does it take, and what breaks.
+function evaluate(cfg, sc, lam, fx, backlog, dt){
+  const far = sc.far || 0;
+  const C = [];
+  const add = (lat, n) => { if (n > 0){ C.push([lat, n * (1 - far)]); if (far > 0) C.push([lat + LAT.far, n * far]); } };
+  let failed = 0;
+
+  let st = lam * sc.static, dyn = lam - st, cdnServed = 0;
+  if (cfg.cdn){ cdnServed = st * CAP.cdnHit; st -= cdnServed; C.push([LAT.edge, cdnServed]); }
+
+  const origin = st + dyn;
+  const up = Math.max(0, cfg.app - (fx.appDown ? 1 : 0));
+  const usable = cfg.lb ? up : (cfg.app >= 1 && !fx.appDown ? 1 : 0);
+  const appCap = usable * CAP.app;
+  const appOk = Math.min(origin, appCap), appDrop = origin - appOk;
+  failed += appDrop;
+  const rhoA = appCap ? origin / appCap : (origin > 0 ? 1 : 0);
+  const appLat = qwait(LAT.app, rhoA);
+  const k = origin ? appOk / origin : 0;
+  const stOk = st * k, dynOk = dyn * k;
+  const pre = LAT.net + (cfg.lb ? LAT.lb : 0) + appLat;
+  add(pre, stOk);
+
+  const reads = dynOk * sc.read, writes = dynOk - reads;
+  const hit = cfg.cache ? sc.hit : 0;
+  const cHit = reads * hit;
+  add(pre + LAT.cache, cHit);
+  const dbReads = reads - cHit;
+
+  let shards = cfg.db, reps = cfg.db ? (cfg.replica || 0) : 0, shardLost = 0, writeLost = 0, promoted = false;
+  if (fx.dbDown && cfg.db > 0){
+    if (reps > 0){
+      if (fx.blip){ shards -= 1; writeLost = 1 / cfg.db; }
+      else { reps -= 1; promoted = true; }
+    } else { shards -= 1; shardLost = 1 / cfg.db; writeLost = 1 / cfg.db; }
+  }
+
+  const readFail = cfg.db ? dbReads * shardLost : dbReads;
+  const readLive = dbReads - readFail;
+  const rCap = shards * CAP.dbRead + reps * CAP.replica;
+  const readOk = Math.min(readLive, rCap), readDrop = readLive - readOk;
+  failed += readFail + readDrop;
+  const rhoR = rCap ? readLive / rCap : (readLive > 0 ? 1 : 0);
+  add(pre + (cfg.cache ? LAT.cache : 0) + qwait(LAT.db, rhoR), readOk);
+
+  const wCap = Math.max(0, shards) * CAP.dbWrite;
+  let wLoad = 0, writeOk = 0, writeBad = 0, enq = 0, drainCap = 0;
+  if (cfg.queue){
+    enq = writes; backlog += writes * dt;
+    if (backlog > CAP.queueMax){ const over = (backlog - CAP.queueMax) / dt; failed += over; enq -= over; writeBad += over; backlog = CAP.queueMax; }
+    add(pre + LAT.ack, enq);
+    drainCap = Math.min((cfg.worker || 0) * CAP.worker, wCap);
+    const drained = Math.min(backlog, drainCap * dt);
+    backlog -= drained; wLoad = drained / dt;
+  } else {
+    const lost = cfg.db ? writes * writeLost : writes;
+    const live = writes - lost;
+    writeOk = Math.min(live, wCap);
+    writeBad = lost + (live - writeOk);
+    failed += writeBad; wLoad = live;
+    add(pre + qwait(LAT.db * 1.6, wCap ? live / wCap : 1), writeOk);
+  }
+
+  const lag = cfg.queue ? (backlog > 0.5 ? (drainCap > 0 ? backlog / drainCap : Infinity) : 0) : 0;
+  return {
+    C, failed, total: lam, backlog, lag, usable, shards, reps, promoted, fx,
+    util: {
+      app: usable ? rhoA : 0,
+      db: Math.max(rCap ? readLive / rCap : 0, wCap ? wLoad / wCap : 0),
+      cache: cHit / CAP.cache,
+      worker: cfg.worker ? wLoad / (cfg.worker * CAP.worker) : 0,
+      cdn: cdnServed / 200000,
+    },
+    flow: { cdn: cdnServed, appDrop, stOk, cHit, readOk, readBad: readFail + readDrop, writeOk, writeBad, enq, drain: cfg.queue ? wLoad : 0 },
+  };
+}
+
+function quantile(C, q){
+  const s = C.filter(c => c[1] > 0).sort((a, b) => a[0] - b[0]);
+  const tot = s.reduce((a, c) => a + c[1], 0);
+  if (!tot) return 0;
+  let acc = 0;
+  for (const [l, n] of s){ acc += n; if (acc >= tot * q) return l; }
+  return s[s.length - 1][0];
+}
+
+const NB = 140, BASE = 1.06;
+const bucketOf = l => Math.max(0, Math.min(NB - 1, Math.floor(Math.log(Math.max(1, l)) / Math.log(BASE))));
+function histP(h, q){
+  let tot = 0; for (const v of h) tot += v; if (!tot) return 0;
+  let acc = 0; for (let i = 0; i < NB; i++){ acc += h[i]; if (acc >= tot * q) return Math.pow(BASE, i + 0.5); }
+  return Math.pow(BASE, NB);
+}
+
+function newRun(){ return { t:0, total:0, failed:0, hist:new Float64Array(NB), backlog:0, last:null }; }
+function stepRun(run, cfg, sc, dt){
+  const lam = trafficAt(sc, run.t), fx = faultsAt(sc, run.t);
+  const e = evaluate(cfg, sc, lam, fx, run.backlog, dt);
+  run.backlog = e.backlog; run.total += lam * dt; run.failed += e.failed * dt;
+  for (const [l, n] of e.C) run.hist[bucketOf(l)] += n * dt;
+  run.t += dt; run.last = e;
+  return e;
+}
+function simulateAll(cfg, sc){
+  const run = newRun(); const dt = 0.1;
+  while (run.t < sc.T - 1e-9) stepRun(run, cfg, sc, dt);
+  return { run, p95: histP(run.hist, 0.95), err: run.total ? run.failed / run.total * 100 : 0, lag: run.last.lag, cost: costOf(cfg) };
+}
+function judge(res, cfg, goals){
+  const checks = [
+    { name:'p95 latency', ok: res.p95 <= goals.p95, val: fmtMs(res.p95), goal: '≤ ' + goals.p95 + ' ms' },
+    { name:'Error rate', ok: res.err <= goals.err, val: res.err.toFixed(2) + '%', goal: '≤ ' + goals.err + '%' },
+    { name:'Monthly cost', ok: res.cost <= goals.budget, val: '$' + res.cost.toLocaleString(), goal: isFinite(goals.budget) ? '≤ $' + goals.budget.toLocaleString() : 'no cap' },
+  ];
+  if (cfg.queue) checks.push({ name:'Queue drained', ok: res.lag <= 10, val: isFinite(res.lag) ? res.lag.toFixed(1) + ' s' : 'never', goal: '≤ 10 s behind' });
+  const pass = checks.every(c => c.ok);
+  let stars = 0;
+  if (pass){ stars = 1; if (res.cost <= goals.budget * 0.9) stars = 2; if (stars === 2 && res.p95 <= goals.p95 * 0.6) stars = 3; }
+  return { checks, pass, stars };
+}
+function fmtMs(v){ return !isFinite(v) ? '∞' : v >= 1000 ? (v / 1000).toFixed(2) + ' s' : Math.round(v) + ' ms'; }
+/*SIM-END*/
+
+const COMP = {
+  cdn:     { name:'CDN', tag:'CDN', desc:'Edge servers near your users that cache images, JS and CSS. 95% of static requests never reach you.' },
+  lb:      { name:'Load balancer', tag:'LB', desc:'Spreads requests across every app server and stops sending to ones that die.' },
+  app:     { name:'App server', tag:'APP', desc:'Runs your code. About 1,000 req/s each before it saturates.' },
+  cache:   { name:'Cache', tag:'KV', desc:'In-memory key–value store (think Redis). A hit costs ~1 ms and skips the database.' },
+  db:      { name:'Database', tag:'DB', desc:'Source of truth: 1,500 reads/s and 600 writes/s. More than one means the data is sharded.' },
+  replica: { name:'Read replica', tag:'RR', desc:'A copy of the database. Adds 1,500 reads/s and can be promoted if the primary dies.' },
+  queue:   { name:'Message queue', tag:'Q', desc:'Accepts writes instantly and holds them until workers catch up.' },
+  worker:  { name:'Queue worker', tag:'W', desc:'Pulls writes off the queue into the database, 250 per second each.' },
+};
+const ORDER = ['cdn','lb','app','cache','db','replica','queue','worker'];
+
+const LEVELS = [
+{ id:'hello', name:'Hello, World', short:'Ship a tiny blog',
+  story:'You are launching a personal blog. A few hundred readers a day, with a small bump when a friend shares a post. Get it online without overspending.',
+  sc:{ rps:80, read:.9, static:.2, far:0, hit:.8, burst:1, ramp:true, T:60, failures:[] },
+  goals:{ p95:200, err:1, budget:300 }, unlock:['app','db'], max:{ app:4, db:1 }, start:{},
+  hint:'Every request needs somewhere for your code to run (an app server) and somewhere to keep the posts (a database). One of each is plenty at 80 req/s.',
+  lesson:{ title:'The two-tier baseline',
+    body:['Almost every system starts here: stateless application code in front of a stateful database. The app server turns an HTTP request into queries; the database is the single source of truth.',
+      'Keeping the app tier stateless matters later. If no user session or file lives only on one app server, you can add or remove servers freely, which is the whole trick in the next level.'],
+    terms:[['RPS','Requests per second. Your peak RPS sizes everything, not the daily average.'],['p95 latency','95% of requests finish faster than this. Averages hide the slow tail that users actually notice.'],['Stateless','A server that keeps nothing between requests, so any copy can serve any user.']],
+    interview:'Start every design by estimating load: daily users × actions per user ÷ 86,400, then multiply by 2–10 for peak.' } },
+
+{ id:'frontpage', name:'Front Page', short:'Horizontal scaling',
+  story:'A post of yours hit the front page of a news aggregator. Traffic is climbing toward 1,500 requests per second, and a single app server tops out at 1,000.',
+  sc:{ rps:1500, read:.95, static:.3, far:0, hit:.8, burst:1, ramp:true, T:60, failures:[] },
+  goals:{ p95:200, err:1, budget:700 }, unlock:['lb','app','db'], max:{ app:8, db:1 }, start:{ app:1, db:1 },
+  hint:'A second app server does nothing on its own: DNS still points at the first one. Put a load balancer in front, then add servers until no single one runs hot.',
+  lesson:{ title:'Scale out, not up',
+    body:['Vertical scaling (a bigger machine) has a ceiling and a single point of failure. Horizontal scaling adds more identical machines and needs something to spread the work: a load balancer.',
+      'Watch latency, not just capacity. A server at 95% utilisation technically keeps up, but requests queue behind each other and response time explodes. Queueing theory says wait time grows roughly with 1 / (1 − utilisation), so engineers aim for 60–75% at peak.'],
+    terms:[['Load balancer','Routes each request to a healthy backend using round-robin, least-connections or hashing.'],['Utilisation (ρ)','Load divided by capacity. Above ~0.8, queues build fast.'],['Headroom','Spare capacity kept for spikes and for losing a machine.']],
+    interview:'Say which layer you are scaling and why. "The app tier is stateless, so I put it behind an L7 load balancer and autoscale on CPU" is a strong sentence.' } },
+
+{ id:'meltdown', name:'Database Meltdown', short:'Caching and replicas',
+  story:'The blog is now a recipe site at 6,000 req/s. Nearly everything is a read of the same popular recipes, and one database only handles 1,500 reads per second.',
+  sc:{ rps:6000, read:.92, static:.1, far:0, hit:.85, burst:1, ramp:true, T:60, failures:[] },
+  goals:{ p95:200, err:1, budget:1000 }, unlock:['lb','app','cache','db','replica'], max:{ app:12, db:1, replica:4 }, start:{ lb:1, app:2, db:1 },
+  hint:'Count the reads that reach the database. A cache absorbs about 85% of them for $60. Read replicas also work, but each one only adds 1,500 reads/s for $100.',
+  lesson:{ title:'Make the database do less',
+    body:['Databases are the hardest tier to scale, so the first move is to send them fewer queries. A cache stores the result of expensive reads in memory. With the cache-aside pattern, the app checks the cache, falls back to the database on a miss, and writes the result back to the cache.',
+      'Read replicas are the second tool: copies of the database that serve reads. They scale reads linearly but cost a full database each, and they lag the primary by milliseconds to seconds, so a user may not see their own write right away.',
+      'The hard part of caching is invalidation. Use a TTL so stale entries expire, and delete the key when the underlying row changes.'],
+    terms:[['Hit rate','Share of reads the cache answers. Popular content gives 80–99%.'],['Cache-aside','App reads cache, then DB on a miss, then fills the cache.'],['Replication lag','How far behind a replica is. Causes read-your-own-write bugs.']],
+    interview:'When asked to scale reads, mention caching first, then replicas, and name the consistency cost of each.' } },
+
+{ id:'photowall', name:'Photo Wall', short:'CDN and the edge',
+  story:'You launched a photo-sharing feed with readers worldwide. 88% of requests are images and scripts, a quarter of users are an ocean away (+130 ms each way), and the target is a snappy 150 ms.',
+  sc:{ rps:8000, read:.9, static:.88, far:.25, hit:.8, burst:1, ramp:true, T:60, failures:[] },
+  goals:{ p95:150, err:1, budget:700 }, unlock:['cdn','lb','app','cache','db','replica'], max:{ app:12, db:1, replica:4 }, start:{ lb:1, app:2, db:1 },
+  hint:'No amount of servers in one region fixes the speed of light. Serve the static files from the edge, then size the origin for what is left.',
+  lesson:{ title:'Move bytes closer to people',
+    body:['A content delivery network keeps copies of static files in hundreds of cities. A user in Sydney fetches the photo from Sydney instead of crossing the Pacific, and your origin servers never see the request.',
+      'This fixes two problems at once: latency (distance is a hard floor of about 1 ms per 100 km round trip in fibre) and load (static assets are often 80%+ of requests). Make files cache-friendly with long Cache-Control headers and content-hashed filenames so a new version gets a new URL.'],
+    terms:[['Origin','Your own servers, where the CDN fetches a file on a miss.'],['Edge / PoP','A CDN point of presence close to users.'],['Cache-Control','HTTP header that tells browsers and CDNs how long a response stays fresh.']],
+    interview:'Any read-heavy media system (Instagram, YouTube, news) starts with "static content goes on a CDN, backed by object storage".' } },
+
+{ id:'flashsale', name:'Flash Sale', short:'Queues and backpressure',
+  story:'A shop runs two 8-second flash sales. Traffic triples from 1,000 to 3,000 req/s and 35% of it is orders. One database accepts 600 writes per second, and you only get one database here.',
+  sc:{ rps:3000, read:.65, static:.1, far:0, hit:.7, burst:3, spikes:[[12,20],[34,42]], ramp:false, T:60, failures:[] },
+  goals:{ p95:250, err:1, budget:700 }, unlock:['lb','app','cache','db','replica','queue','worker'], max:{ app:8, db:1, replica:3, worker:6 }, start:{ lb:1, app:2, db:1 },
+  hint:'Peak writes are about 950/s but the average is under 500/s. A queue accepts orders instantly and lets workers write them at a pace the database can take. Size the workers for the average, not the peak.',
+  lesson:{ title:'Absorb the spike, process at your own pace',
+    body:['A message queue decouples accepting work from doing it. The user gets an instant "order received" while the write happens a moment later. During a burst, the queue grows; after the burst, workers drain it.',
+      'This only works if workers can outpace the average arrival rate. If they cannot, the backlog grows forever and orders arrive minutes late. Size workers for the sustained rate, and size the queue for the burst.',
+      'The trade-off is that writes become asynchronous. Your product has to tolerate "processing…" states, and consumers must be idempotent because queues deliver at least once.'],
+    terms:[['Backpressure','Signalling upstream to slow down when downstream is full.'],['At-least-once','A message may be delivered twice; handlers must be idempotent.'],['Consumer lag','How far behind the workers are, in messages or seconds.']],
+    interview:'Ticketing, checkout and notification systems almost always put a queue (Kafka, SQS, RabbitMQ) between the API and the slow work.' } },
+
+{ id:'nines', name:'Four Nines', short:'Redundancy and failover',
+  story:'You now run a payments dashboard with a 99.5% success SLO for this test. Chaos engineering is on: an app server will crash, then the database primary will die.',
+  sc:{ rps:2500, read:.9, static:.2, far:0, hit:.7, burst:1, ramp:true, T:60, failures:[{ kind:'app', at:18, until:34 },{ kind:'db', at:38, until:50 }] },
+  goals:{ p95:250, err:0.5, budget:800 }, unlock:['lb','app','cache','db','replica','queue','worker'], max:{ app:10, db:1, replica:3, worker:6 }, start:{ lb:1, app:3, db:1 },
+  hint:'Plan for N+1: enough app servers that losing one still covers peak. A read replica can be promoted when the primary dies, so you only lose a couple of seconds of writes.',
+  lesson:{ title:'Everything fails, so plan for it',
+    body:['Availability comes from redundancy and fast detection. Behind a load balancer, a crashed app server is just less capacity, provided you kept one server of headroom (N+1). Without the load balancer, the crashed server was your whole site.',
+      'Databases are harder because they hold state. A standby or replica that can be promoted turns a long outage into a short failover. Asynchronous replication can lose the last few writes; synchronous replication avoids that but adds latency to every write.',
+      'Four nines (99.99%) allows only 52 minutes of downtime a year, which is why every layer needs a plan for losing a component.'],
+    terms:[['SPOF','Single point of failure: one box whose loss takes the system down.'],['N+1','Capacity for peak load plus one spare unit.'],['Failover','Promoting a standby to take over from a failed primary.']],
+    interview:'For each component, ask "what happens when this dies?" Interviewers want health checks, replicas across zones and an RTO/RPO number.' } },
+
+{ id:'hypergrowth', name:'Hypergrowth', short:'Sharding',
+  story:'A social app at 12,000 req/s, and 30% of the dynamic traffic is writes: posts, likes, follows. That is over 2,500 writes per second. No cache or replica can help with writes; you need more primaries.',
+  sc:{ rps:12000, read:.7, static:.3, far:0, hit:.8, burst:1, ramp:true, T:60, failures:[] },
+  goals:{ p95:200, err:1, budget:2000 }, unlock:['cdn','lb','app','cache','db','replica','queue','worker'], max:{ app:16, db:8, replica:4, worker:6 }, start:{ lb:1, app:4, db:1, cache:1 },
+  hint:'Each database shard owns a slice of the users and handles 600 writes/s. Aim for about 70% write utilisation across shards, and let the CDN and cache keep everything else off the origin.',
+  lesson:{ title:'Split the data',
+    body:['Sharding (horizontal partitioning) splits rows across several databases by a shard key, such as user_id. Each shard is a full primary with its own write capacity, so writes scale with the number of shards.',
+      'The shard key decides everything. A good key spreads load evenly and keeps related data together. A bad one creates hot shards (one celebrity user) or forces queries to fan out to every shard.',
+      'Sharding has real costs: cross-shard joins and transactions get hard, and re-sharding later is painful. Consistent hashing reduces how much data moves when you add a shard.'],
+    terms:[['Shard key','The column used to pick which shard owns a row.'],['Hot spot','One shard getting far more traffic than the others.'],['Consistent hashing','Maps keys to a ring so adding a node moves only ~1/N of keys.']],
+    interview:'Before sharding, show you tried caching, replicas and vertical scaling. Then name your shard key and how you avoid hot spots.' } },
+
+{ id:'sandbox', name:'Sandbox', short:'Your own scenario', sandbox:true,
+  story:'Set your own traffic and turn chaos on or off. Use it to test a design from an interview question, or to see where each component stops helping.',
+  sc:{ rps:5000, read:.85, static:.4, far:.1, hit:.8, burst:1, spikes:[[15,25],[40,48]], ramp:true, T:60, failures:[] },
+  goals:{ p95:200, err:1, budget:Infinity }, unlock:ORDER, max:{ app:16, db:8, replica:4, worker:6 }, start:{ lb:1, app:3, db:1 },
+  hint:'Try one change at a time and watch which node turns red first. That node is your bottleneck.',
+  lesson:null },
+];
+
+/* ---------- state ---------- */
+const store = {
+  get(){ try { return JSON.parse(localStorage.getItem('loadbearing:v1') || '{}'); } catch { return {}; } },
+  set(v){ try { localStorage.setItem('loadbearing:v1', JSON.stringify(v)); } catch {} },
+};
+let saved = store.get();
+const prog = { stars: saved.stars || {}, cfgs: saved.cfgs || {} };
+let li = Math.min(saved.level || 0, LEVELS.length - 1);
+let cfg = {};
+let hintOpen = false;
+let speed = 6;
+let run = null, running = false, preview = null, finished = null;
+const series = { rps:[], p95:[], err:[], lag:[] };
+let logLines = [];
+
+function unlocked(i){ return i === 0 || LEVELS[i].sandbox ? true : (prog.stars[LEVELS[i - 1].id] || 0) > 0; }
+function persist(){ prog.cfgs[LEVELS[li].id] = cfg; store.set({ stars:prog.stars, cfgs:prog.cfgs, level:li }); }
+function blankCfg(){ const c = {}; ORDER.forEach(k => c[k] = 0); return c; }
+
+function loadLevel(i, keepCfg){
+  li = i; const L = LEVELS[i];
+  cfg = Object.assign(blankCfg(), keepCfg || prog.cfgs[L.id] || L.start);
+  ORDER.forEach(k => { if (!L.unlock.includes(k)) cfg[k] = 0; cfg[k] = Math.min(cfg[k], maxOf(k)); });
+  hintOpen = false; stopRun(); finished = null; logLines = [];
+  for (const k in series) series[k] = [];
+  document.getElementById('result').hidden = true;
+  renderAll(); persist();
+}
+function maxOf(k){ const L = LEVELS[li]; return ['cdn','lb','cache','queue'].includes(k) ? 1 : (L.max[k] ?? (k === 'db' ? 1 : 8)); }
+
+/* ---------- render: rail, brief, rack ---------- */
+const $ = id => document.getElementById(id);
+function starHtml(n, cls){ let s = ''; for (let i = 0; i < 3; i++) s += i < n ? '★' : '<span class="off">★</span>'; return `<span class="${cls}">${s}</span>`; }
+
+function renderRail(){
+  const r = $('rail');
+  r.innerHTML = '<div class="label">Incidents</div>' + LEVELS.map((L, i) => {
+    const s = prog.stars[L.id] || 0, ok = unlocked(i);
+    return `<button class="lvl" data-i="${i}" ${ok ? '' : 'disabled'} aria-current="${i === li}">
+      <span class="n">${L.sandbox ? '∞' : String(i + 1).padStart(2, '0')}</span>
+      <span class="t">${L.name}<small>${ok ? L.short : 'Clear the previous level'}</small></span>
+      ${L.sandbox ? '' : starHtml(s, 'stars')}</button>`;
+  }).join('');
+  r.querySelectorAll('.lvl').forEach(b => b.onclick = () => loadLevel(+b.dataset.i));
+  const total = LEVELS.filter(l => !l.sandbox).reduce((a, l) => a + (prog.stars[l.id] || 0), 0);
+  $('progress').textContent = `${total} / ${(LEVELS.length - 1) * 3} stars`;
+}
+
+function fmtN(n){ return n >= 10000 ? (n / 1000).toFixed(n >= 100000 ? 0 : 1).replace(/\.0$/, '') + 'k' : Math.round(n).toLocaleString(); }
+
+function renderBrief(){
+  const L = LEVELS[li], sc = L.sc, g = L.goals;
+  const facts = [
+    ['Peak', fmtN(sc.rps) + ' req/s'],
+    ['Static', Math.round(sc.static * 100) + '%'],
+    ['Reads', Math.round(sc.read * 100) + '% of dynamic'],
+  ];
+  if (sc.far) facts.push(['Overseas', Math.round(sc.far * 100) + '% of users']);
+  if (sc.burst > 1) facts.push(['Spikes', '×' + sc.burst + ' bursts']);
+  if (sc.failures && sc.failures.length) facts.push(['Chaos', sc.failures.length + ' failures']);
+  const goals = [['p95', '≤ ' + g.p95 + ' ms'], ['errors', '≤ ' + g.err + '%']];
+  if (isFinite(g.budget)) goals.push(['budget', '≤ $' + g.budget.toLocaleString() + '/mo']);
+  let html = `<div class="label">${L.sandbox ? 'Free play' : 'Level ' + (li + 1) + ' · ' + L.short}</div>
+    <h2>${L.name}</h2><p class="story">${L.story}</p>
+    <div class="chips">${facts.map(f => `<span class="chip">${f[0]} <b>${f[1]}</b></span>`).join('')}
+    ${goals.map(f => `<span class="chip goal">${f[0]} <b>${f[1]}</b></span>`).join('')}</div>`;
+  if (L.sandbox){
+    html += `<div class="sandbox">
+      ${slider('sbRps', 'Peak traffic', Math.log10(sc.rps), 1.7, 4.5, 0.01, v => fmtN(Math.pow(10, v)) + '/s')}
+      ${slider('sbStatic', 'Static share', sc.static * 100, 0, 95, 1, v => Math.round(v) + '%')}
+      ${slider('sbRead', 'Reads (dynamic)', sc.read * 100, 10, 99, 1, v => Math.round(v) + '%')}
+      ${slider('sbFar', 'Overseas users', sc.far * 100, 0, 60, 1, v => Math.round(v) + '%')}
+      ${slider('sbHit', 'Cache hit rate', sc.hit * 100, 20, 99, 1, v => Math.round(v) + '%')}
+      <label class="check"><input type="checkbox" id="sbBurst" ${sc.burst > 1 ? 'checked' : ''}> Traffic spikes (×3)</label>
+      <label class="check"><input type="checkbox" id="sbChaos" ${sc.failures.length ? 'checked' : ''}> Chaos (crash app + DB)</label>
+    </div>`;
+  }
+  html += hintOpen ? `<p class="hint">${L.hint}</p>` : `<div><button class="btn" id="hintBtn">Show hint</button>${prog.stars[L.id] && L.lesson ? ' <button class="btn" id="lessonBtn">Review lesson</button>' : ''}</div>`;
+  $('brief').innerHTML = html;
+  const hb = $('hintBtn'); if (hb) hb.onclick = () => { hintOpen = true; renderBrief(); };
+  const lb = $('lessonBtn'); if (lb) lb.onclick = () => { renderLesson(true); $('lessonBox').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block:'start' }); };
+  if (L.sandbox) bindSandbox();
+}
+function slider(id, label, val, min, max, step, fmt){
+  return `<label for="${id}"><span>${label}<b class="mono" id="${id}V">${fmt(val)}</b></span>
+    <input type="range" id="${id}" min="${min}" max="${max}" step="${step}" value="${val}"></label>`;
+}
+function bindSandbox(){
+  const sc = LEVELS[li].sc;
+  const map = {
+    sbRps: [v => sc.rps = Math.round(Math.pow(10, v)), v => fmtN(Math.pow(10, v)) + '/s'],
+    sbStatic: [v => sc.static = v / 100, v => Math.round(v) + '%'],
+    sbRead: [v => sc.read = v / 100, v => Math.round(v) + '%'],
+    sbFar: [v => sc.far = v / 100, v => Math.round(v) + '%'],
+    sbHit: [v => sc.hit = v / 100, v => Math.round(v) + '%'],
+  };
+  for (const id in map){
+    const el = $(id); el.oninput = () => { const v = +el.value; map[id][0](v); $(id + 'V').textContent = map[id][1](v); updatePreview(); };
+  }
+  $('sbBurst').onchange = e => { sc.burst = e.target.checked ? 3 : 1; sc.ramp = !e.target.checked; updatePreview(); };
+  $('sbChaos').onchange = e => { sc.failures = e.target.checked ? [{ kind:'app', at:18, until:34 },{ kind:'db', at:38, until:50 }] : []; updatePreview(); };
+}
+
+function renderRack(){
+  const L = LEVELS[li], prev = li > 0 ? LEVELS[li - 1].unlock : [];
+  const cost = costOf(cfg), b = L.goals.budget;
+  $('rack').innerHTML = '<div class="label">Component rack</div>' + ORDER.map(k => {
+    const c = COMP[k], on = L.unlock.includes(k), isNew = on && !L.sandbox && li > 0 && !prev.includes(k);
+    const mx = maxOf(k);
+    return `<div class="comp ${on ? '' : 'locked'}">
+      <div class="tag">${c.tag}</div>
+      <div style="min-width:0"><div class="nm">${c.name} <span class="price">$${COST[k]}/mo</span>${isNew ? '<span class="new">NEW</span>' : ''}</div>
+      <div class="d">${on ? c.desc + (k === 'db' && mx === 1 ? ' Sharding unlocks later.' : '') : 'Unlocks in a later level.'}</div></div>
+      <div class="step"><button data-k="${k}" data-d="-1" aria-label="Remove ${c.name}" ${!on || cfg[k] <= 0 || running ? 'disabled' : ''}>−</button>
+      <output>${cfg[k]}</output>
+      <button data-k="${k}" data-d="1" aria-label="Add ${c.name}" ${!on || cfg[k] >= mx || running ? 'disabled' : ''}>+</button></div></div>`;
+  }).join('') + `<div class="budget">
+      <div class="row"><span>Monthly cost</span><b class="mono">$${cost.toLocaleString()}</b></div>
+      ${isFinite(b) ? `<div class="bar"><i class="${cost > b ? 'over' : ''}" style="width:${Math.min(100, cost / b * 100)}%"></i></div>
+      <div class="row" style="font-size:12px;color:var(--muted)"><span>Budget $${b.toLocaleString()}</span><span>${cost > b ? 'Over by $' + (cost - b) : '$' + (b - cost) + ' left'}</span></div>` : '<div class="row" style="font-size:12px;color:var(--muted)"><span>No budget cap in the sandbox</span></div>'}
+    </div>`;
+  $('rack').querySelectorAll('.step button').forEach(btn => btn.onclick = () => {
+    const k = btn.dataset.k; cfg[k] = Math.max(0, Math.min(maxOf(k), cfg[k] + +btn.dataset.d));
+    finished = null; $('result').hidden = true; persist(); renderRack(); updatePreview();
+  });
+}
+
+function renderLesson(force){
+  const L = LEVELS[li], box = $('lessonBox');
+  if (!L.lesson || !(force || prog.stars[L.id])){ box.hidden = true; return; }
+  const ls = L.lesson;
+  box.innerHTML = `<div class="label">Lesson · ${L.short}</div><h3>${ls.title}</h3>
+    ${ls.body.map(p => `<p>${p}</p>`).join('')}
+    <dl class="terms">${ls.terms.map(t => `<dt>${t[0]}</dt><dd>${t[1]}</dd>`).join('')}</dl>
+    <div class="interview"><b>In an interview</b>${ls.interview}</div>`;
+  box.hidden = false;
+}
+
+function renderAll(){ renderRail(); renderBrief(); renderRack(); renderLesson(false); renderLog(); updatePreview(); updateTele(null); }
+
+/* ---------- log ---------- */
+function log(t, msg, cls){ logLines.push({ t, msg, cls }); renderLog(); }
+function renderLog(){
+  const el = $('log');
+  if (!logLines.length){ el.innerHTML = '<span class="empty">Event log. Press “Run load test” to send 60 seconds of traffic at your design.</span>'; return; }
+  el.innerHTML = logLines.map(l => `<div><span class="ts">${l.t.toFixed(0).padStart(2, '0')}s</span><span class="${l.cls || ''}">${l.msg}</span></div>`).join('');
+  el.scrollTop = el.scrollHeight;
+}
+
+/* ---------- telemetry ---------- */
+function cls(v, goal){ return v <= goal * 0.8 ? 'ok' : v <= goal ? 'warn' : 'bad'; }
+function updateTele(e){
+  const g = LEVELS[li].goals;
+  if (!e){
+    $('tRps').textContent = '0'; $('tRps').className = 'v';
+    $('tRpsSub').textContent = 'req/s · peak ' + fmtN(LEVELS[li].sc.rps);
+    $('tP95').textContent = '—'; $('tP95').className = 'v'; $('tP95Sub').textContent = 'target ≤ ' + g.p95 + ' ms';
+    $('tErr').textContent = '—'; $('tErr').className = 'v'; $('tErrSub').textContent = 'target ≤ ' + g.err + '%';
+    $('tLag').textContent = cfg.queue ? '0 s' : 'no queue'; $('tLag').className = 'v'; $('tLagSub').textContent = 'writes waiting';
+    drawSparks(); return;
+  }
+  const p = quantile(e.C, 0.95), er = e.total ? e.failed / e.total * 100 : 0;
+  $('tRps').textContent = fmtN(e.total);
+  $('tRpsSub').textContent = 'req/s · run total ' + fmtN(run.total);
+  $('tP95').textContent = fmtMs(p); $('tP95').className = 'v ' + cls(p, g.p95);
+  const cum = run.total ? run.failed / run.total * 100 : 0;
+  $('tErr').textContent = er.toFixed(er < 10 ? 2 : 0) + '%'; $('tErr').className = 'v ' + cls(er, g.err);
+  $('tErrSub').textContent = 'run so far ' + cum.toFixed(2) + '% · ≤ ' + g.err + '%';
+  if (cfg.queue){
+    $('tLag').textContent = isFinite(e.lag) ? e.lag.toFixed(1) + ' s' : 'stalled'; $('tLag').className = 'v ' + (isFinite(e.lag) ? cls(e.lag, 10) : 'bad');
+    $('tLagSub').textContent = fmtN(e.backlog) + ' writes waiting';
+  } else { $('tLag').textContent = 'no queue'; $('tLag').className = 'v'; }
+  drawSparks();
+}
+function drawSparks(){
+  const g = LEVELS[li].goals;
+  spark('sRps', series.rps, LEVELS[li].sc.rps * 1.05, null);
+  spark('sP95', series.p95, Math.max(g.p95 * 1.6, ...series.p95.map(v => Math.min(v, g.p95 * 4))), g.p95);
+  spark('sErr', series.err, Math.max(g.err * 3, ...series.err.map(v => Math.min(v, 100))), g.err);
+  spark('sLag', series.lag, Math.max(15, ...series.lag.map(v => Math.min(v, 120))), 10);
+}
+function spark(id, data, max, goal){
+  const c = $(id), r = c.getBoundingClientRect(), dpr = devicePixelRatio || 1;
+  if (!r.width) return;
+  c.width = r.width * dpr; c.height = r.height * dpr;
+  const x = c.getContext('2d'); x.scale(dpr, dpr);
+  const W = r.width, H = r.height, n = 600;
+  x.clearRect(0, 0, W, H);
+  if (goal != null){ const gy = H - goal / max * (H - 2) - 1; x.strokeStyle = tok.muted; x.setLineDash([2, 3]); x.lineWidth = 1; x.beginPath(); x.moveTo(0, gy); x.lineTo(W, gy); x.stroke(); x.setLineDash([]); }
+  if (data.length < 2) return;
+  const pts = data.map((v, i) => [i / n * W, H - Math.min(v, max) / max * (H - 2) - 1]);
+  x.beginPath(); x.moveTo(pts[0][0], H); pts.forEach(p => x.lineTo(p[0], p[1])); x.lineTo(pts[pts.length - 1][0], H); x.closePath();
+  x.fillStyle = tok.accent + '22'; x.fill();
+  x.beginPath(); pts.forEach((p, i) => i ? x.lineTo(p[0], p[1]) : x.moveTo(p[0], p[1])); x.strokeStyle = tok.accent; x.lineWidth = 1.5; x.stroke();
+  const l = pts[pts.length - 1]; x.fillStyle = tok.accent; x.beginPath(); x.arc(l[0], l[1], 2.2, 0, 7); x.fill();
+}
+
+/* ---------- theme tokens for canvas ---------- */
+let tok = {};
+function readTokens(){
+  const s = getComputedStyle(document.documentElement);
+  ['bg','panel','sunk','ink','muted','line','accent','write','ok','warn','bad','wire','grid'].forEach(k => tok[k] = s.getPropertyValue('--' + k).trim());
+}
+readTokens();
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { readTokens(); drawSparks(); });
+new MutationObserver(() => { readTokens(); drawSparks(); }).observe(document.documentElement, { attributes:true, attributeFilter:['data-theme'] });
+
+/* ---------- topology canvas ---------- */
+const cv = $('topo'), ctx = cv.getContext('2d');
+let W = 0, H = 0, G = null;
+function resize(){
+  const r = cv.getBoundingClientRect(), dpr = devicePixelRatio || 1;
+  W = r.width; H = r.height; cv.width = W * dpr; cv.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  G = layout(); drawSparks();
+}
+addEventListener('resize', resize);
+
+function stack(n, x, y0, y1, w, maxH){
+  const out = []; if (!n) return out;
+  const gap = 5, h = Math.max(12, Math.min(maxH, (y1 - y0 - gap * (n - 1)) / n));
+  const tot = n * h + (n - 1) * gap, s = (y0 + y1) / 2 - tot / 2;
+  for (let i = 0; i < n; i++) out.push({ x, y: s + i * (h + gap) + h / 2, w, h });
+  return out;
+}
+function layout(){
+  const w = Math.max(40, Math.min(80, W * 0.085)), top = 46, bot = H - 22;
+  const X = f => 14 + w / 2 + f * (W - 28 - w);
+  const g = {};
+  g.users = { x: X(0), y: (top + bot) / 2, w, h: 64 };
+  if (cfg.cdn) g.cdn = { x: X(0.15), y: (top + bot) / 2, w, h: 46 };
+  if (cfg.lb) g.lb = { x: X(0.30), y: (top + bot) / 2, w, h: 46 };
+  g.app = stack(cfg.app, X(0.46), top, bot, w, 40);
+  const hasLower = cfg.queue || cfg.worker;
+  if (cfg.cache) g.cache = { x: X(0.65), y: top + 22, w, h: 40 };
+  if (cfg.queue) g.queue = { x: X(0.63), y: bot - 26, w, h: 40 };
+  g.worker = stack(cfg.worker, X(0.78), hasLower ? (top + bot) / 2 + 20 : bot - 80, bot, w * 0.8, 30);
+  const split = cfg.replica ? top + (bot - top) * 0.55 : bot;
+  g.db = stack(cfg.db, X(1), top, split, w, 44);
+  g.replica = stack(cfg.replica, X(1), split + 10, bot, w, 34);
+  return g;
+}
+function ortho(a, b){
+  const ax = a.x + a.w / 2, bx = b.x - b.w / 2;
+  if (bx < ax){ // target sits to the left or overlaps: route around the bottom
+    return [[a.x, a.y + a.h / 2], [a.x, b.y], [b.x + b.w / 2, b.y]];
+  }
+  const mx = (ax + bx) / 2;
+  return Math.abs(a.y - b.y) < 0.5 ? [[ax, a.y], [bx, b.y]] : [[ax, a.y], [mx, a.y], [mx, b.y], [bx, b.y]];
+}
+function wire(a, b){
+  const p = ortho(a, b); ctx.beginPath(); ctx.moveTo(p[0][0], p[0][1]);
+  for (let i = 1; i < p.length; i++) ctx.lineTo(p[i][0], p[i][1]); ctx.stroke();
+}
+function entry(){ return G.lb ? [G.lb] : (G.app[0] ? [G.app[0]] : []); }
+function front(){ return G.cdn ? [G.users, G.cdn] : [G.users]; }
+
+function drawWires(){
+  ctx.strokeStyle = tok.wire; ctx.lineWidth = 1;
+  const f = front();
+  for (let i = 0; i < f.length - 1; i++) wire(f[i], f[i + 1]);
+  const last = f[f.length - 1];
+  if (G.lb){ wire(last, G.lb); G.app.forEach(a => wire(G.lb, a)); }
+  else if (G.app[0]) wire(last, G.app[0]);
+  const targets = [G.cache, G.queue, ...G.db, ...G.replica].filter(Boolean);
+  G.app.forEach(a => targets.forEach(t => wire(a, t)));
+  if (G.queue) G.worker.forEach(w => { wire(G.queue, w); G.db.forEach(d => wire(w, d)); });
+}
+
+function utilColor(u){ return u >= 0.9 ? tok.bad : u >= 0.72 ? tok.warn : tok.ok; }
+function node(n, tag, sub, util, state){
+  const x = n.x - n.w / 2, y = n.y - n.h / 2;
+  ctx.fillStyle = tok.panel; ctx.strokeStyle = state === 'down' ? tok.bad : tok.ink; ctx.lineWidth = 1.5;
+  if (state === 'down') ctx.setLineDash([4, 3]);
+  roundRect(x, y, n.w, n.h, 4); ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
+  if (util != null && state !== 'down'){
+    const u = Math.min(1, util); ctx.fillStyle = tok.sunk; ctx.fillRect(x + 4, y + n.h - 6, n.w - 8, 3);
+    ctx.fillStyle = utilColor(util); ctx.fillRect(x + 4, y + n.h - 6, (n.w - 8) * u, 3);
+  }
+  ctx.fillStyle = state === 'down' ? tok.bad : tok.ink; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const big = n.h >= 28;
+  ctx.font = `600 ${big ? 11 : 9}px ${getFontMono()}`;
+  ctx.fillText(state === 'down' ? 'DOWN' : tag, n.x, n.y - (big && sub ? 6 : 0));
+  if (big && sub){ ctx.font = `400 9px ${getFontMono()}`; ctx.fillStyle = tok.muted; ctx.fillText(sub, n.x, n.y + 7); }
+}
+let monoFam = null;
+function getFontMono(){ return monoFam || (monoFam = getComputedStyle(document.documentElement).getPropertyValue('--f-mono').trim()); }
+function roundRect(x, y, w, h, r){ ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+const pct = u => Math.round(Math.min(u, 9.99) * 100) + '%';
+
+function drawNodes(e){
+  const fx = e ? e.fx : { appDown:false, dbDown:false };
+  const sc = LEVELS[li].sc;
+  node(G.users, 'USERS', sc.far ? Math.round(sc.far * 100) + '% far' : fmtN(e ? e.total : sc.rps) + '/s', null);
+  if (G.cdn) node(G.cdn, 'CDN', e ? fmtN(e.flow.cdn) + '/s' : 'edge', null);
+  if (G.lb) node(G.lb, 'LB', 'L7', null);
+  G.app.forEach((a, i) => {
+    const down = fx.appDown && i === 0;
+    const idle = !cfg.lb && i > 0;
+    node(a, 'APP' + (G.app.length > 1 ? ' ' + (i + 1) : ''), idle ? 'idle' : e ? pct(e.util.app) : '', idle ? 0 : e ? e.util.app : null, down ? 'down' : '');
+  });
+  if (G.cache) node(G.cache, 'CACHE', e ? pct(e.util.cache) : '', e ? e.util.cache : null);
+  if (G.queue) node(G.queue, 'QUEUE', e ? fmtN(e.backlog) + ' msg' : '', null);
+  G.worker.forEach((w, i) => node(w, 'W' + (i + 1), '', e ? e.util.worker : null));
+  G.db.forEach((d, i) => {
+    const down = fx.dbDown && i === 0;
+    node(d, cfg.db > 1 ? 'SHARD ' + (i + 1) : 'DB', e ? pct(e.util.db) : 'primary', e ? e.util.db : null, down ? 'down' : '');
+  });
+  G.replica.forEach((r, i) => {
+    const promoted = e && e.promoted && i === 0;
+    const rUtil = e ? e.util.db : null;
+    node(r, promoted ? 'PRIMARY' : 'REPLICA', promoted ? 'promoted' : e ? pct(rUtil) : 'read-only', rUtil, '');
+  });
+  // labels on canvas
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'; ctx.fillStyle = tok.muted; ctx.font = `400 11px ${getFontMono()}`;
+  const L = LEVELS[li];
+  if (running || finished){
+    ctx.fillText(`t = ${run.t.toFixed(1).padStart(4, ' ')} s / ${L.sc.T} s`, 14, 22);
+    const flags = [];
+    if (fx.appDown) flags.push('APP 1 CRASHED');
+    if (fx.dbDown) flags.push(e && e.promoted ? 'FAILED OVER' : 'DB PRIMARY DOWN');
+    if (L.sc.burst > 1 && (L.sc.spikes || []).some(([a, b]) => run.t >= a && run.t < b)) flags.push('SPIKE ×' + L.sc.burst);
+    if (flags.length){ ctx.fillStyle = tok.bad; ctx.font = `600 11px ${getFontMono()}`; ctx.fillText(flags.join('  ·  '), 150, 22); }
+  } else {
+    ctx.fillText('PREVIEW AT PEAK LOAD · bars show utilisation', 14, 22);
+  }
+  if (!cfg.app || !cfg.db){
+    ctx.fillStyle = tok.muted; ctx.textAlign = 'center'; ctx.font = `400 13px ${getComputedStyle(document.body).fontFamily}`;
+    ctx.fillText(!cfg.app ? 'Add an app server from the rack to start serving requests.' : 'Requests have nowhere to read or write data. Add a database.', W / 2, H - 10);
+  }
+}
+
+/* particles */
+let parts = [], pops = [], spawnAcc = 0, drainAcc = 0;
+function pick(arr){ return arr[Math.floor(Math.random() * arr.length)]; }
+function chain(nodes){
+  const pts = [];
+  for (let i = 0; i < nodes.length - 1; i++){
+    const seg = ortho(nodes[i], nodes[i + 1]);
+    if (pts.length) seg.shift();
+    pts.push(...seg);
+  }
+  return pts;
+}
+function makePart(nodes, color, bad){
+  if (nodes.length < 2) return;
+  const pts = chain(nodes); if (pts.length < 2) return;
+  const lens = [0];
+  for (let i = 1; i < pts.length; i++) lens.push(lens[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  parts.push({ pts, lens, L: lens[lens.length - 1], d: 0, color, bad });
+}
+function spawn(e, n){
+  const f = e.flow;
+  const routes = [['cdn', f.cdn], ['appDrop', f.appDrop], ['static', f.stOk], ['cHit', f.cHit], ['read', f.readOk], ['readBad', f.readBad], ['write', f.writeOk], ['writeBad', f.writeBad], ['enq', f.enq]];
+  const tot = routes.reduce((a, r) => a + r[1], 0); if (!tot) return;
+  const fx = e.fx;
+  const upApps = G.app.filter((_, i) => (cfg.lb ? true : i === 0) && !(fx.appDown && i === 0));
+  const upDb = G.db.filter((_, i) => !(fx.dbDown && i === 0 && !e.promoted && e.shards < cfg.db));
+  const liveDb = upDb.length ? upDb : G.db;
+  for (let s = 0; s < n; s++){
+    let r = Math.random() * tot, kind = routes[0][0];
+    for (const [k, w] of routes){ if (r < w){ kind = k; break; } r -= w; }
+    const fr = front(); const ent = G.lb ? [G.lb] : [];
+    const app = upApps.length ? pick(upApps) : G.app[0];
+    if (kind === 'cdn'){ makePart([G.users, G.cdn], tok.ok, false); continue; }
+    const head = [...fr, ...ent];
+    if (kind === 'appDrop'){ makePart(app ? [...head, app] : head, tok.bad, true); continue; }
+    if (!app) continue;
+    if (kind === 'static'){ makePart([...head, app], tok.accent, false); continue; }
+    if (kind === 'cHit'){ makePart([...head, app, G.cache], tok.ok, false); continue; }
+    const readPool = [...liveDb, ...G.replica];
+    if (kind === 'read'){ makePart([...head, app, pick(readPool)], tok.accent, false); continue; }
+    if (kind === 'readBad'){ makePart(readPool.length ? [...head, app, pick(readPool)] : [...head, app], tok.bad, true); continue; }
+    if (kind === 'write'){ makePart([...head, app, pick(liveDb)], tok.write, false); continue; }
+    if (kind === 'writeBad'){ makePart(G.db.length ? [...head, app, pick(G.db)] : [...head, app], tok.bad, true); continue; }
+    if (kind === 'enq'){ makePart([...head, app, G.queue], tok.write, false); continue; }
+  }
+}
+function spawnDrain(n, e){
+  const live = G.db.filter((_, i) => !(e.fx.dbDown && i === 0 && e.shards < cfg.db));
+  for (let s = 0; s < n; s++) if (G.worker.length && live.length) makePart([G.queue, pick(G.worker), pick(live)], tok.write, false);
+}
+function stepParts(dt){
+  const v = Math.max(180, W * 0.42);
+  for (const p of parts) p.d += v * dt;
+  const keep = [];
+  for (const p of parts){
+    if (p.d >= p.L){ const e = p.pts[p.pts.length - 1]; pops.push({ x: e[0], y: e[1], a: 1, c: p.bad ? tok.bad : p.color, bad: p.bad }); }
+    else keep.push(p);
+  }
+  parts = keep.slice(-900);
+  for (const q of pops) q.a -= dt * (q.bad ? 1.4 : 3);
+  pops = pops.filter(q => q.a > 0).slice(-300);
+}
+function drawParts(){
+  for (const p of parts){
+    let i = 1; while (i < p.lens.length - 1 && p.lens[i] < p.d) i++;
+    const a = p.pts[i - 1], b = p.pts[i], t = (p.d - p.lens[i - 1]) / Math.max(1e-6, p.lens[i] - p.lens[i - 1]);
+    ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, 2.3, 0, 7); ctx.fill();
+  }
+  for (const q of pops){
+    ctx.globalAlpha = Math.max(0, q.a); ctx.strokeStyle = q.c; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(q.x, q.y, q.bad ? 3 + (1 - q.a) * 8 : 2 + (1 - q.a) * 4, 0, 7); ctx.stroke();
+    if (q.bad){ ctx.beginPath(); ctx.moveTo(q.x - 3, q.y - 3); ctx.lineTo(q.x + 3, q.y + 3); ctx.moveTo(q.x + 3, q.y - 3); ctx.lineTo(q.x - 3, q.y + 3); ctx.stroke(); }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawGrid(){
+  ctx.fillStyle = tok.bg; ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = tok.grid; ctx.lineWidth = 1; ctx.beginPath();
+  for (let x = 0.5; x < W; x += 24){ ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+  for (let y = 0.5; y < H; y += 24){ ctx.moveTo(0, y); ctx.lineTo(W, y); }
+  ctx.stroke();
+}
+
+/* ---------- preview + run ---------- */
+function updatePreview(){
+  const L = LEVELS[li];
+  preview = evaluate(cfg, L.sc, L.sc.rps, { appDown:false, dbDown:false, blip:false }, 0, 0.1);
+  G = layout(); updateTele(running || finished ? run.last : null);
+  if (!running && !finished) updateTele(null);
+}
+
+function startRun(){
+  if (running) return;
+  run = newRun(); running = true; finished = null; logLines = []; for (const k in series) series[k] = [];
+  parts = []; pops = [];
+  $('result').hidden = true; $('runBtn').textContent = 'Stop'; $('skipBtn').disabled = false;
+  log(0, `Load test started: ramping toward ${fmtN(LEVELS[li].sc.rps)} req/s.`);
+  prevFx = { appDown:false, dbDown:false, blip:false, spike:false }; lastWarn = { app:-99, db:-99, err:-99 };
+  renderRack();
+}
+function stopRun(){ running = false; $('runBtn').textContent = 'Run load test'; $('skipBtn').disabled = true; }
+
+let prevFx = {}, lastWarn = {};
+function watchEvents(e){
+  const t = run.t, sc = LEVELS[li].sc;
+  const spike = sc.burst > 1 && (sc.spikes || []).some(([a, b]) => t >= a && t < b);
+  if (spike && !prevFx.spike) log(t, `Flash sale opens: traffic jumps to ${fmtN(e.total)} req/s.`, 'warn');
+  if (!spike && prevFx.spike) log(t, 'Spike over. Traffic back to baseline.');
+  if (e.fx.appDown && !prevFx.appDown) log(t, cfg.lb ? (cfg.app > 1 ? 'APP 1 crashed. Load balancer health check removed it from rotation.' : 'APP 1 crashed and it was your only app server.') : 'APP 1 crashed. With no load balancer, every user was pointed at it.', 'bad');
+  if (!e.fx.appDown && prevFx.appDown) log(t, 'APP 1 restarted and rejoined.', 'ok');
+  if (e.fx.dbDown && !prevFx.dbDown) log(t, cfg.replica ? 'Database primary died. Promoting a replica…' : 'Database primary died and there is no replica to take over.', 'bad');
+  if (e.promoted && !prevFx.promoted) log(t, 'Replica promoted to primary. Writes flowing again.', 'ok');
+  if (!e.fx.dbDown && prevFx.dbDown) log(t, 'Old primary rebuilt and back as a standby.', 'ok');
+  if (e.util.app > 0.95 && t - lastWarn.app > 12){ log(t, `App tier at ${pct(e.util.app)} of capacity. Requests are queueing or being dropped.`, 'warn'); lastWarn.app = t; }
+  if (e.util.db > 0.95 && t - lastWarn.db > 12){ log(t, `Database at ${pct(e.util.db)} of capacity.`, 'warn'); lastWarn.db = t; }
+  prevFx = { ...e.fx, promoted: e.promoted, spike };
+}
+
+function finishRun(){
+  // Use the same fixed step as simulateAll so the verdict never depends on frame rate.
+  const L = LEVELS[li];
+  const res = simulateAll(cfg, L.sc);
+  const j = judge(res, cfg, L.goals);
+  stopRun(); finished = { res, j };
+  log(L.sc.T, j.pass ? 'Load test passed.' : 'Load test failed.', j.pass ? 'ok' : 'bad');
+  if (j.pass && !L.sandbox){
+    const before = prog.stars[L.id] || 0;
+    prog.stars[L.id] = Math.max(before, j.stars);
+  }
+  persist(); renderRail(); renderRack(); renderBrief(); showResult(res, j); renderLesson(false);
+}
+
+function diagnose(res){
+  const L = LEVELS[li], sc = L.sc, tips = [];
+  const pk = evaluate(cfg, sc, sc.rps, { appDown:false, dbDown:false, blip:false }, 0, 0.1);
+  if (!cfg.app) return 'Nothing is running your code. Add an app server.';
+  if (!cfg.db) return 'Dynamic requests need a database to read and write.';
+  if (res.cost > L.goals.budget) tips.push(`You are $${res.cost - L.goals.budget} over budget. Find the component doing the least work per dollar.`);
+  if (!cfg.lb && cfg.app > 1) tips.push('Only APP 1 got traffic. Without a load balancer, extra servers sit idle.');
+  if (pk.util.app > 0.85) tips.push(`At peak the app tier runs at ${pct(pk.util.app)}. Past ~80%, queueing delay climbs steeply.`);
+  if (pk.util.db > 0.85) tips.push(`At peak the database runs at ${pct(pk.util.db)}. Reduce what reaches it or add capacity.`);
+  if (sc.far && !cfg.cdn) tips.push(`${Math.round(sc.far * 100)}% of users are far away and pay +${LAT.far} ms on every request to your origin.`);
+  if (sc.failures.length && res.err > L.goals.err){
+    if (!cfg.lb || cfg.app * CAP.app - CAP.app < sc.rps * (1 - sc.static * (cfg.cdn ? CAP.cdnHit : 0))) tips.push('When one app server dies, the rest must still cover peak load (N+1).');
+    if (!cfg.replica) tips.push('With no replica, a dead primary takes every database request down with it.');
+  }
+  if (cfg.queue && res.lag > 10) tips.push(cfg.worker ? 'Workers drain slower than orders arrive on average, so the backlog never clears.' : 'Writes are piling up in the queue with no workers to drain it.');
+  return tips.slice(0, 3).join(' ') || 'Close. Look at which node turns amber or red first during the run.';
+}
+
+function showResult(res, j){
+  const L = LEVELS[li], next = li + 1 < LEVELS.length ? li + 1 : null;
+  const el = $('result');
+  el.innerHTML = `<div class="card" role="dialog" aria-labelledby="resTitle">
+    <div class="label">${L.sandbox ? 'Sandbox run' : 'Level ' + (li + 1) + ' result'}</div>
+    <h3 id="resTitle" class="${j.pass ? 'pass' : 'fail'}">${j.pass ? 'System held.' : 'Incident.'}</h3>
+    ${j.pass && !L.sandbox ? `<div class="bigstars">${starHtml(j.stars, '').replace('<span class="">', '').replace(/<\/span>$/, '')}</div><p class="starkey">★ pass · ★★ under 90% of budget · ★★★ also p95 under 60% of target</p>` : ''}
+    <div class="checks">${j.checks.map(c => `<span class="${c.ok ? 'y' : 'x'}">${c.ok ? '✓' : '✗'}</span><span>${c.name} <span style="color:var(--muted)">${c.goal}</span></span><span class="m">${c.val}</span>`).join('')}</div>
+    ${!j.pass ? `<p class="diag">${diagnose(res)}</p>` : ''}
+    <div class="row-actions">
+      ${j.pass && next != null && !L.sandbox ? `<button class="btn primary" id="nextBtn">${LEVELS[next].sandbox ? 'Open sandbox' : 'Next: ' + LEVELS[next].name}</button>` : ''}
+      ${j.pass && L.lesson ? '<button class="btn" id="readBtn">Read the lesson</button>' : ''}
+      <button class="btn ${j.pass ? '' : 'primary'}" id="tweakBtn">${j.pass ? 'Optimise further' : 'Adjust and retry'}</button>
+    </div></div>`;
+  el.hidden = false;
+  const nb = $('nextBtn'); if (nb) nb.onclick = () => { loadLevel(next); scrollTo({ top:0, behavior:'auto' }); };
+  const rb = $('readBtn'); if (rb) rb.onclick = () => { el.hidden = true; renderLesson(true); $('lessonBox').scrollIntoView({ block:'start' }); };
+  $('tweakBtn').onclick = () => { el.hidden = true; };
+  (nb || $('tweakBtn')).focus({ preventScroll:true });
+}
+
+$('runBtn').onclick = () => { if (running){ stopRun(); log(run.t, 'Stopped by you.'); renderRack(); } else startRun(); };
+$('skipBtn').onclick = () => { if (running) finishRun(); };
+document.querySelectorAll('.seg button').forEach(b => b.onclick = () => {
+  speed = +b.dataset.speed; document.querySelectorAll('.seg button').forEach(x => x.setAttribute('aria-pressed', x === b));
+});
+
+/* ---------- main loop ---------- */
+let lastT = performance.now(), sampleAcc = 0;
+const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+function frame(now){
+  const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
+  if (!G) resize();
+  const L = LEVELS[li];
+  let e = preview;
+  if (running){
+    let simDt = dt * speed;
+    while (simDt > 1e-6 && run.t < L.sc.T){ const s = Math.min(0.1, simDt); e = stepRun(run, cfg, L.sc, s); simDt -= s; watchEvents(e); }
+    e = run.last;
+    sampleAcc += dt;
+    if (sampleAcc > 0.05){
+      sampleAcc = 0;
+      series.rps.push(e.total); series.p95.push(quantile(e.C, 0.95)); series.err.push(e.total ? e.failed / e.total * 100 : 0); series.lag.push(isFinite(e.lag) ? e.lag : 120);
+      const keep = 600; for (const k in series) if (series[k].length > keep) series[k].shift();
+      updateTele(e);
+    }
+    if (run.t >= L.sc.T - 1e-9) finishRun();
+  } else if (finished && run && run.last) e = run.last;
+
+  drawGrid(); drawWires();
+  if (!reduce.matches && e){
+    const rate = running ? Math.min(110, 6 * Math.sqrt(e.total / 10)) * Math.min(1.6, speed / 6 + 0.4) : Math.min(40, 3 * Math.sqrt(e.total / 10));
+    spawnAcc += rate * dt; const n = Math.floor(spawnAcc); spawnAcc -= n; if (n) spawn(e, n);
+    if (cfg.queue && e.flow.drain > 0){ drainAcc += Math.min(60, 6 * Math.sqrt(e.flow.drain / 10)) * dt; const m = Math.floor(drainAcc); drainAcc -= m; if (m) spawnDrain(m, e); }
+    stepParts(dt);
+  } else if (reduce.matches){ parts = []; pops = []; }
+  drawParts(); drawNodes(running || finished ? e : preview);
+  requestAnimationFrame(frame);
+}
+
+/* hot reload: keep level and design across republishes */
+window.claude?.hot?.snapshot?.(() => ({ li, cfg }));
+function start(data){
+  if (data && data.li != null && LEVELS[data.li]) loadLevel(data.li, data.cfg); else loadLevel(li);
+  resize(); requestAnimationFrame(frame);
+}
+window.claude?.hot?.ready ? window.claude.hot.ready(start) : start(window.claude?.hot?.data ?? {});
+</script>

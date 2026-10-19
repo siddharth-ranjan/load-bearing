@@ -13,6 +13,6 @@ A browser game for learning system design. Each level is an incident: you add co
 | 7 | Hypergrowth | Sharding |
 | ∞ | Sandbox | Your own scenario |
 
-Open `index.html` in a browser. No build step and no dependencies.
+Play it at https://siddharthranjan.me/load-bearing/ (deployed by GitHub Pages on every push to `main`). To run it locally, open `index.html` in a browser; there are no dependencies.
 
 The simulation model lives between the `/*SIM-START*/` and `/*SIM-END*/` markers in `index.html`.

@@ -13,6 +13,6 @@ A browser game for learning system design. Each level is an incident: you add co
 | 7 | Hypergrowth | Sharding |
 | ∞ | Sandbox | Your own scenario |
 
-Play it at https://load-bearing-game.vercel.app (Vercel) or https://siddharthranjan.me/load-bearing/ (GitHub Pages). Both redeploy on every push to `main` and use `build.sh`. To run it locally, open `index.html` in a browser; there are no dependencies.
+Play it at https://load-bearing.siddharthranjan.app (also https://load-bearing-game.vercel.app). Vercel redeploys on every push to `main` using `build.sh`. To run it locally, open `index.html` in a browser; there are no dependencies.
 
 The simulation model lives between the `/*SIM-START*/` and `/*SIM-END*/` markers in `index.html`.

@@ -13,7 +13,7 @@ A browser game for learning system design. Each level is an incident: you add co
 | 7 | Hypergrowth | Sharding |
 | ∞ | Sandbox | Your own scenario |
 
-Play it at https://learn.siddharthranjan.app/load-bearing/index.html. This repo deploys to the `load-bearing` Vercel project on every push to `main` (built by `build.sh`), and the `learn` app rewrites `/load-bearing/*` to it. To run it locally, open `index.html` in a browser; there are no dependencies.
+Play it at https://learn.siddharthranjan.app/load-bearing. This repo deploys to the `load-bearing` Vercel project on every push to `main` (built by `build.sh`), and the `learn` app rewrites `/load-bearing/*` to it. To run it locally, open `index.html` in a browser; there are no dependencies.
 
 Articles in `blog/` are generated: edit `tools/build_blog.py` and run `python3 tools/build_blog.py`.
 

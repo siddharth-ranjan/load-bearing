@@ -849,8 +849,8 @@ def shell(title, desc, body, current=""):
 </head>
 <body>
 <div class="bar"><div class="wrap">
-  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
-  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html"{' aria-current="page"' if current == "index" else ""}>Field notes</a></nav>
+  <a class="brand" href="../">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../">Play</a><a href="index.html"{' aria-current="page"' if current == "index" else ""}>Field notes</a></nav>
 </div></div>
 {body}
 </body>
@@ -859,7 +859,7 @@ def shell(title, desc, body, current=""):
 
 
 def level_links(ids):
-    return ", ".join(f'<a href="../index.html#{i}">{LEVELS[i][0]} · {LEVELS[i][1]}</a>' for i in ids)
+    return ", ".join(f'<a href="../#{i}">{LEVELS[i][0]} · {LEVELS[i][1]}</a>' for i in ids)
 
 
 def practice_box(p):
@@ -868,7 +868,7 @@ def practice_box(p):
   <span class="label">Practise it</span>
   <h2>Model it in the sandbox</h2>
   <p>Set the traffic from your estimate, then build the read and write paths and see which component turns red first.</p>
-  <a class="cta" href="../index.html#sandbox">Open the sandbox</a>
+  <a class="cta" href="../#sandbox">Open the sandbox</a>
 </section>"""
     if p.get("practice"):
         lv = LEVELS[p["practice"]]
@@ -876,7 +876,7 @@ def practice_box(p):
   <span class="label">Practise it</span>
   <h2>Level {lv[0]}: {lv[1]}</h2>
   <p>Put this into practice against live traffic. Your progress in the game is saved in your browser.</p>
-  <a class="cta" href="../index.html#{p["practice"]}">Play level {lv[0]}</a>
+  <a class="cta" href="../#{p["practice"]}">Play level {lv[0]}</a>
 </section>"""
     if p.get("exercise"):
         return f"""<section class="game">

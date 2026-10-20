@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Coding an LRU cache and a rate limiter | Load/Bearing</title>
+<meta name="description" content="Two classics you should be able to write from memory in Java: O(1) LRU eviction and a thread-safe token bucket, with tests.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">Low-level design · 19 of 22</span>
+  <h1>Coding an LRU cache and a rate limiter</h1>
+  <p class="dek">Two classics you should be able to write from memory in Java: O(1) LRU eviction and a thread-safe token bucket, with tests.</p>
+  <div class="meta"><span>5 min read</span></div>
+</header>
+<article class="wrap">
+
+<p>These two come up constantly, alone or as the first step of a bigger problem. Both reward the same habits: pick the right data structures, make the operations O(1), make them thread-safe, and prove they work with tests. For the theory, see <a href="caching.html">caching</a> and <a href="rate-limiting.html">rate limiting</a>.</p>
+
+<h2>LRU cache in O(1)</h2>
+<p>You need two things at once: find any key in O(1), and know which key was used least recently, also in O(1). A <strong>HashMap</strong> gives the first. A <strong>doubly linked list</strong> ordered by use gives the second, because a node can be removed from the middle in O(1) when you already hold a reference to it. The map stores those references.</p>
+<ul>
+<li><code>get</code>: look up the node, move it to the front, return its value.</li>
+<li><code>put</code>: update and move to the front if present. Otherwise, if full, remove the node at the back from both the list and the map, then insert the new node at the front.</li>
+<li>Two <strong>sentinel</strong> nodes (head and tail) remove every null check at the ends.</li>
+</ul>
+<pre class="code" data-lang="java"><code>public final class LruCache&lt;K, V&gt; {
+    private final class Node {
+        final K key;
+        V value;
+        Node prev, next;
+        Node(K key, V value) { this.key = key; this.value = value; }
+    }
+
+    private final int capacity;
+    private final Map&lt;K, Node&gt; map = new HashMap&lt;&gt;();
+    private final Node head = new Node(null, null);   // most recently used end
+    private final Node tail = new Node(null, null);   // least recently used end
+
+    public LruCache(int capacity) {
+        if (capacity &lt;= 0) throw new IllegalArgumentException(&quot;capacity must be positive&quot;);
+        this.capacity = capacity;
+        head.next = tail;
+        tail.prev = head;
+    }
+
+    public synchronized Optional&lt;V&gt; get(K key) {
+        Node n = map.get(key);
+        if (n == null) return Optional.empty();
+        moveToFront(n);
+        return Optional.of(n.value);
+    }
+
+    public synchronized void put(K key, V value) {
+        Node n = map.get(key);
+        if (n != null) {
+            n.value = value;
+            moveToFront(n);
+            return;
+        }
+        if (map.size() == capacity) {
+            Node lru = tail.prev;
+            unlink(lru);
+            map.remove(lru.key);
+        }
+        n = new Node(key, value);
+        map.put(key, n);
+        addFront(n);
+    }
+
+    private void moveToFront(Node n) { unlink(n); addFront(n); }
+    private void unlink(Node n) { n.prev.next = n.next; n.next.prev = n.prev; }
+    private void addFront(Node n) {
+        n.next = head.next;
+        n.prev = head;
+        head.next.prev = n;
+        head.next = n;
+    }
+}</code></pre>
+<p>Notes for the interview:</p>
+<ul>
+<li>The node stores its key, so eviction can remove it from the map.</li>
+<li><code>synchronized</code> on both methods is correct and simple. <code>ConcurrentHashMap</code> alone wouldn't be enough, because each operation changes the map and the list together. For more throughput, stripe the cache into several independently locked segments by key hash.</li>
+<li>In real code, <code>LinkedHashMap</code> does all of this. Mention it, but expect to be asked for the manual version:</li>
+</ul>
+<pre class="code" data-lang="java"><code>class LruMap&lt;K, V&gt; extends LinkedHashMap&lt;K, V&gt; {
+    private final int capacity;
+    LruMap(int capacity) { super(16, 0.75f, true); this.capacity = capacity; }   // true = access order
+    @Override protected boolean removeEldestEntry(Map.Entry&lt;K, V&gt; eldest) { return size() &gt; capacity; }
+}</code></pre>
+
+<h2>Token bucket rate limiter</h2>
+<p>Store the token count and the time of the last refill. On each request, add the tokens earned since then (capped at capacity), then spend one if there is one. No background thread is needed. Pass the clock in, so tests can control time.</p>
+<pre class="code" data-lang="java"><code>public final class TokenBucket {
+    private final long capacity;
+    private final double refillPerNano;
+    private final LongSupplier clock;      // System::nanoTime in production, a fake in tests
+    private double tokens;
+    private long last;
+
+    public TokenBucket(long capacity, double refillPerSecond, LongSupplier clock) {
+        if (capacity &lt;= 0 || refillPerSecond &lt; 0) throw new IllegalArgumentException();
+        this.capacity = capacity;
+        this.refillPerNano = refillPerSecond / 1_000_000_000.0;
+        this.clock = clock;
+        this.tokens = capacity;
+        this.last = clock.getAsLong();
+    }
+
+    public synchronized boolean tryAcquire() {
+        long now = clock.getAsLong();
+        tokens = Math.min(capacity, tokens + (now - last) * refillPerNano);   // lazy refill, no timer
+        last = now;
+        if (tokens &lt; 1) return false;
+        tokens -= 1;
+        return true;
+    }
+}</code></pre>
+<ul>
+<li>The read-update-write must be atomic, hence <code>synchronized</code>. Without it, two threads could both see one token and both pass.</li>
+<li>Use <code>System.nanoTime()</code>, not wall-clock time, which can jump backwards when the clock is adjusted.</li>
+</ul>
+
+<h2>Per-user limits without unbounded memory</h2>
+<p>One bucket per user ID, created on first use. To stop the map growing forever, cap it and evict the least recently seen user, which is the LRU idea again:</p>
+<pre class="code" data-lang="java"><code>public final class PerUserLimiter {
+    private final Map&lt;String, TokenBucket&gt; buckets;
+    private final Supplier&lt;TokenBucket&gt; newBucket;
+
+    public PerUserLimiter(int maxUsers, Supplier&lt;TokenBucket&gt; newBucket) {
+        this.newBucket = newBucket;
+        // Access-ordered LinkedHashMap: the least recently seen user is evicted first.
+        this.buckets = Collections.synchronizedMap(new LinkedHashMap&lt;String, TokenBucket&gt;(16, 0.75f, true) {
+            @Override protected boolean removeEldestEntry(Map.Entry&lt;String, TokenBucket&gt; eldest) {
+                return size() &gt; maxUsers;
+            }
+        });
+    }
+
+    public boolean allow(String userId) {
+        return buckets.computeIfAbsent(userId, id -&gt; newBucket.get()).tryAcquire();
+    }
+}</code></pre>
+<p>Evicting a user is nearly harmless. A bucket idle for longer than capacity ÷ rate seconds would be full anyway, so recreating it changes nothing. Only a recently active user who gets evicted early receives a fresh burst, so size the cap well above the number of active users. In production, a cache library with <code>expireAfterAccess</code> (such as Caffeine) does the same thing, and across many servers the bucket moves to Redis.</p>
+
+<h2>Tests</h2>
+<p>Test the behaviour with a fake clock, and test thread safety by hammering a bucket that never refills from several threads:</p>
+<pre class="code" data-lang="java"><code>class TokenBucketTest {
+    private long now = 0;                                   // fake clock, in nanoseconds
+
+    @Test
+    void allowsBurstThenRefillsAtRate() {
+        TokenBucket bucket = new TokenBucket(3, 1.0, () -&gt; now);
+        assertTrue(bucket.tryAcquire());
+        assertTrue(bucket.tryAcquire());
+        assertTrue(bucket.tryAcquire());
+        assertFalse(bucket.tryAcquire());                   // burst used up
+
+        now += 1_000_000_000L;                              // one second later
+        assertTrue(bucket.tryAcquire());
+        assertFalse(bucket.tryAcquire());
+    }
+
+    @Test
+    void neverGrantsMoreThanCapacityUnderContention() throws Exception {
+        TokenBucket bucket = new TokenBucket(100, 0.0, () -&gt; 0L);
+        AtomicInteger granted = new AtomicInteger();
+        List&lt;Callable&lt;Void&gt;&gt; calls = new ArrayList&lt;&gt;();
+        for (int i = 0; i &lt; 1_000; i++) {
+            calls.add(() -&gt; { if (bucket.tryAcquire()) granted.incrementAndGet(); return null; });
+        }
+        ExecutorService pool = Executors.newFixedThreadPool(8);
+        pool.invokeAll(calls);
+        pool.shutdown();
+        assertEquals(100, granted.get());
+    }
+}</code></pre>
+<p>For the LRU cache, test that a <code>get</code> protects a key from eviction, that updating an existing key doesn't grow the size, and that capacity 1 works.</p>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Explain why the cache needs both a map and a linked list.</li>
+<li>Use sentinel nodes, and store the key in the node.</li>
+<li>Refill tokens lazily from a monotonic clock.</li>
+<li>Make each operation atomic, and say how you'd scale past one lock.</li>
+<li>Bound per-user memory, and write tests with a fake clock.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Exercise</h2>
+  <p>Close this page and write both classes from scratch in under 40 minutes, then the two tests. If you get stuck, write down exactly where. That's the part to re-derive tomorrow.</p>
+</section>
+<h2>Further reading</h2>
+<ul>
+<li>Eric Freeman and Elisabeth Robson, <em>Head First Design Patterns</em> (O'Reilly). The friendliest introduction to the classic patterns.</li>
+<li><a href="https://refactoring.guru/design-patterns">Refactoring.Guru: design patterns</a>, with diagrams and Java examples for each pattern.</li>
+<li>Joshua Bloch, <em>Effective Java</em>. Idiomatic Java, including builders, immutability and concurrency.</li>
+</ul>
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="solid-patterns.html"><span class="label">Previous</span><b>SOLID and the six patterns worth knowing</b></a><a class="next" href="parking-lot.html"><span class="label">Next</span><b>Parking lot in 90 minutes</b></a></nav>
+</main>
+</body>
+</html>

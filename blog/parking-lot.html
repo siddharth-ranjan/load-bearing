@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Parking lot in 90 minutes | Load/Bearing</title>
+<meta name="description" content="The classic LLD problem: clarify, model the entities, leave an extension point, and handle two cars racing for the last spot.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">Low-level design · 20 of 22</span>
+  <h1>Parking lot in 90 minutes</h1>
+  <p class="dek">The classic LLD problem: clarify, model the entities, leave an extension point, and handle two cars racing for the last spot.</p>
+  <div class="meta"><span>4 min read</span></div>
+</header>
+<article class="wrap">
+
+<p>The parking lot tests whether you can turn a vague prompt into a clean object model and working code within the time limit. Spend the first 10 minutes on questions. They save the next 80.</p>
+
+<h2>A 90-minute plan</h2>
+<div class="table"><table><thead><tr><th>Minutes</th><th>Do</th></tr></thead><tbody><tr><td class="n">0–10</td><td>Clarify requirements and agree what's out of scope</td></tr><tr><td class="n">10–20</td><td>List entities and interfaces; sketch their relationships</td></tr><tr><td class="n">20–70</td><td>Write the code: model, inventory, allocation, entry and exit, fees</td></tr><tr><td class="n">70–85</td><td>Write tests, including the concurrency case</td></tr><tr><td class="n">85–90</td><td>Walk through an extension, such as electric-vehicle spots</td></tr></tbody></table></div>
+
+<h2>Questions to ask</h2>
+<ul>
+<li>Several floors? Which spot sizes, and which vehicles fit which sizes?</li>
+<li>Multiple entry and exit gates working at the same time? (Yes, which is the concurrency question.)</li>
+<li>How is the fee calculated: hourly, flat, different by spot size?</li>
+<li>Do we show free spots per floor? Payments, reservations, lost tickets? Usually out of scope, so say so.</li>
+</ul>
+
+<h2>Entities and interfaces</h2>
+<pre class="code" data-lang="java"><code>enum VehicleType { MOTORCYCLE, CAR, TRUCK }
+enum SpotSize { SMALL, MEDIUM, LARGE }
+
+record Vehicle(String plate, VehicleType type) {}
+record Spot(String id, int floor, SpotSize size) {}
+record Ticket(String id, Vehicle vehicle, Spot spot, Instant entry) {}
+
+interface SpotAllocationStrategy { Optional&lt;Spot&gt; claim(Vehicle vehicle, SpotInventory inventory); }
+interface FeePolicy { long feeCents(Ticket ticket, Instant exit); }</code></pre>
+<p>Two interfaces carry the design. <code>SpotAllocationStrategy</code> decides which spot a vehicle gets, and <code>FeePolicy</code> decides what it pays. Both change often, and both are <a href="solid-patterns.html">strategies</a>, so adding "nearest to the lift" allocation or weekend pricing is a new class, not an edit.</p>
+
+<h2>Two cars, one spot</h2>
+<p>If two gates read "spot 17 is free" and then both mark it taken, two cars get the same spot. The fix is to make finding and claiming a spot <strong>one atomic step</strong>. Keep a concurrent queue of free spots per size: <code>poll()</code> removes and returns one element atomically, so two threads can never receive the same spot.</p>
+<pre class="code" data-lang="java"><code>final class SpotInventory {
+    private final Map&lt;SpotSize, Queue&lt;Spot&gt;&gt; free = new EnumMap&lt;&gt;(SpotSize.class);
+
+    SpotInventory(Collection&lt;Spot&gt; spots) {
+        for (SpotSize size : SpotSize.values()) free.put(size, new ConcurrentLinkedQueue&lt;&gt;());
+        spots.forEach(this::release);
+    }
+
+    /** Atomically takes a free spot of this size. Two callers can never get the same spot. */
+    Optional&lt;Spot&gt; claim(SpotSize size) { return Optional.ofNullable(free.get(size).poll()); }
+
+    void release(Spot spot) { free.get(spot.size()).offer(spot); }
+}</code></pre>
+
+<h2>Allocation, fees and the lot</h2>
+<pre class="code" data-lang="java"><code>final class SmallestFit implements SpotAllocationStrategy {
+    public Optional&lt;Spot&gt; claim(Vehicle vehicle, SpotInventory inventory) {
+        for (SpotSize size : sizesThatFit(vehicle.type())) {
+            Optional&lt;Spot&gt; spot = inventory.claim(size);
+            if (spot.isPresent()) return spot;
+        }
+        return Optional.empty();
+    }
+
+    private static List&lt;SpotSize&gt; sizesThatFit(VehicleType type) {
+        return switch (type) {
+            case MOTORCYCLE -&gt; List.of(SpotSize.SMALL, SpotSize.MEDIUM, SpotSize.LARGE);
+            case CAR        -&gt; List.of(SpotSize.MEDIUM, SpotSize.LARGE);
+            case TRUCK      -&gt; List.of(SpotSize.LARGE);
+        };
+    }
+}
+
+record HourlyFee(Map&lt;SpotSize, Long&gt; centsPerHour) implements FeePolicy {
+    public long feeCents(Ticket ticket, Instant exit) {
+        long minutes = Duration.between(ticket.entry(), exit).toMinutes();
+        long hours = Math.max(1, (minutes + 59) / 60);           // round up, minimum one hour
+        return hours * centsPerHour.get(ticket.spot().size());
+    }
+}
+
+final class ParkingLot {
+    private final SpotInventory inventory;
+    private final SpotAllocationStrategy allocation;
+    private final FeePolicy fees;
+    private final Clock clock;
+    private final Map&lt;String, Ticket&gt; active = new ConcurrentHashMap&lt;&gt;();
+
+    ParkingLot(SpotInventory inventory, SpotAllocationStrategy allocation, FeePolicy fees, Clock clock) {
+        this.inventory = inventory; this.allocation = allocation; this.fees = fees; this.clock = clock;
+    }
+
+    Optional&lt;Ticket&gt; enter(Vehicle vehicle) {
+        return allocation.claim(vehicle, inventory).map(spot -&gt; {
+            Ticket ticket = new Ticket(UUID.randomUUID().toString(), vehicle, spot, clock.instant());
+            active.put(ticket.id(), ticket);
+            return ticket;
+        });
+    }
+
+    long exit(String ticketId) {
+        Ticket ticket = active.remove(ticketId);                // remove() is atomic: a ticket exits once
+        if (ticket == null) throw new IllegalArgumentException(&quot;Unknown or already used ticket &quot; + ticketId);
+        inventory.release(ticket.spot());
+        return fees.feeCents(ticket, clock.instant());
+    }
+}</code></pre>
+<p>Things worth pointing out as you write it:</p>
+<ul>
+<li>The lot depends only on interfaces, and the clock is injected, so tests control time.</li>
+<li><code>active.remove(ticketId)</code> is atomic, so a ticket can only be used to exit once.</li>
+<li>Fees are in <code>long</code> cents. Never use <code>double</code> for money.</li>
+</ul>
+
+<h2>If the state lives in a database</h2>
+<p>With several servers, the in-memory queue becomes a table, and the atomic claim becomes one SQL statement. <code>FOR UPDATE SKIP LOCKED</code> lets concurrent transactions each grab a different free row rather than queueing on the same one:</p>
+<pre class="code" data-lang="sql"><code>-- Claim one free medium spot; concurrent transactions skip rows already locked by others.
+UPDATE spots SET occupied = true, ticket_id = :ticket
+WHERE id = (
+    SELECT id FROM spots
+    WHERE size = &#x27;MEDIUM&#x27; AND NOT occupied
+    ORDER BY floor, id
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id;          -- no row returned means the lot is full</code></pre>
+
+<h2>The extension point</h2>
+<p>Interviewers often end with "now add electric-vehicle charging spots". With this design that means: add <code>EV</code> to the size enum (or a separate feature flag on <code>Spot</code>), an allocation strategy that prefers EV spots for EVs, and perhaps a fee policy that adds charging. Nothing in <code>ParkingLot</code> changes. Say that out loud. It's the point of the exercise.</p>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Spend the first 10 minutes on requirements and scope.</li>
+<li>Use strategy interfaces for allocation and pricing.</li>
+<li>Make claiming a spot atomic, in memory or in SQL.</li>
+<li>Use integer cents and an injected clock.</li>
+<li>Test the race, and show one extension.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Exercise</h2>
+  <p>Set a 90-minute timer and build it with no reference material: entities, allocation strategy, fee policy, and a test where 50 threads race for 10 spots. Then add an electric-vehicle spot type and count how many existing classes you had to edit.</p>
+</section>
+<h2>Further reading</h2>
+<ul>
+<li>Eric Freeman and Elisabeth Robson, <em>Head First Design Patterns</em> (O'Reilly). The friendliest introduction to the classic patterns.</li>
+<li><a href="https://refactoring.guru/design-patterns">Refactoring.Guru: design patterns</a>, with diagrams and Java examples for each pattern.</li>
+<li>Joshua Bloch, <em>Effective Java</em>. Idiomatic Java, including builders, immutability and concurrency.</li>
+</ul>
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="lru-rate-limiter.html"><span class="label">Previous</span><b>Coding an LRU cache and a rate limiter</b></a><a class="next" href="splitwise.html"><span class="label">Next</span><b>Splitwise: expenses, splits and settling up</b></a></nav>
+</main>
+</body>
+</html>

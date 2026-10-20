@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>URL shortener and ID generation | Load/Bearing</title>
+<meta name="description" content="A tiny product with a real design question: how do you hand out billions of short, unique keys without a bottleneck?">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">High-level design · 12 of 22</span>
+  <h1>URL shortener and ID generation</h1>
+  <p class="dek">A tiny product with a real design question: how do you hand out billions of short, unique keys without a bottleneck?</p>
+  <div class="meta"><span>4 min read</span></div>
+</header>
+<article class="wrap">
+
+<p>A URL shortener turns <code>https://example.com/some/very/long/path?with=params</code> into <code>sho.rt/aZ3kQ9x</code> and redirects anyone who visits the short link. The redirect has to be fast and almost never fail, which makes it a good exercise in caching and availability. The interesting part is generating the keys.</p>
+
+<h2>Requirements and numbers</h2>
+<ul>
+<li><strong>Functional:</strong> create a short link (optionally with a custom alias and an expiry), redirect, and count clicks.</li>
+<li><strong>Non-functional:</strong> redirects in a few milliseconds, very high availability, no two long URLs ever sharing a key, and keys that aren't easy to guess.</li>
+</ul>
+<div class="table"><table><thead><tr><th>Quantity</th><th>Math</th><th>Result</th></tr></thead><tbody><tr><td>New links per second</td><td>100M per month ÷ 2.6M seconds</td><td class="n">≈ 40/s average, ~120/s peak</td></tr><tr><td>Redirects per second</td><td>100 reads per write</td><td class="n">≈ 4,000/s average, ~12,000/s peak</td></tr><tr><td>Rows after 5 years</td><td>100M × 12 × 5</td><td class="n">6 billion</td></tr><tr><td>Storage</td><td>6B × ~500 bytes</td><td class="n">≈ 3 TB</td></tr><tr><td>Key space with 7 base62 characters</td><td>62⁷</td><td class="n">≈ 3.5 trillion</td></tr></tbody></table></div>
+<p>Writes are tiny. Reads are 100 times larger and very skewed, since a few links go viral. Seven characters of <code>[0-9a-zA-Z]</code> give about 580 keys for every link you'll ever store.</p>
+
+<figure><div class="dgw"><svg class="dg" width="620" height="194" viewBox="0 0 620 194" role="img" aria-label="Writes take a key from the pool and store the mapping. Redirects read Redis first and fall back to the database."><path d="M120,97.0 C143.0,97.0 143.0,97.0 166,97.0"/><polygon class="head" points="166,93.0 172,97.0 166,101.0"/><path d="M284,97.0 C307.0,97.0 307.0,65.0 330,65.0"/><polygon class="head" points="330,61.0 336,65.0 330,69.0"/><path d="M284,97.0 C307.0,97.0 307.0,129.0 330,129.0"/><polygon class="head" points="330,125.0 336,129.0 330,133.0"/><path d="M448,65.0 C471.0,65.0 471.0,33.0 494,33.0"/><polygon class="head" points="494,29.0 500,33.0 494,37.0"/><path d="M448,65.0 C471.0,65.0 471.0,97.0 494,97.0"/><polygon class="head" points="494,93.0 500,97.0 494,101.0"/><path d="M448,65.0 C471.0,65.0 471.0,161.0 494,161.0"/><polygon class="head" points="494,157.0 500,161.0 494,165.0"/><path d="M448,129.0 C471.0,129.0 471.0,33.0 494,33.0"/><polygon class="head" points="494,29.0 500,33.0 494,37.0"/><path d="M448,129.0 C471.0,129.0 471.0,97.0 494,97.0"/><polygon class="head" points="494,93.0 500,97.0 494,101.0"/><path d="M448,129.0 C471.0,129.0 471.0,161.0 494,161.0"/><polygon class="head" points="494,157.0 500,161.0 494,165.0"/><g class=""><rect x="8" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="64.0" y="94.0" text-anchor="middle">CLIENT</text><text class="sub" x="64.0" y="110.0" text-anchor="middle"></text></g><g class=""><rect x="172" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="94.0" text-anchor="middle">LB</text><text class="sub" x="228.0" y="110.0" text-anchor="middle"></text></g><g class=""><rect x="336" y="40.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="62.0" text-anchor="middle">API 1</text><text class="sub" x="392.0" y="78.0" text-anchor="middle">stateless</text></g><g class=""><rect x="336" y="104.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="126.0" text-anchor="middle">API 2</text><text class="sub" x="392.0" y="142.0" text-anchor="middle">stateless</text></g><g class="hot"><rect x="500" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="556.0" y="30.0" text-anchor="middle">REDIS</text><text class="sub" x="556.0" y="46.0" text-anchor="middle">key → URL</text></g><g class=""><rect x="500" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="556.0" y="94.0" text-anchor="middle">URL DB</text><text class="sub" x="556.0" y="110.0" text-anchor="middle">key-value</text></g><g class=""><rect x="500" y="136.0" width="112" height="50" rx="5"/><text class="tag" x="556.0" y="158.0" text-anchor="middle">KEY POOL</text><text class="sub" x="556.0" y="174.0" text-anchor="middle">pre-generated</text></g></svg></div><figcaption>Writes take a key from the pool and store the mapping. Redirects read Redis first and fall back to the database.</figcaption></figure>
+
+<h2>Generating keys</h2>
+<div class="table"><table><thead><tr><th>Approach</th><th>How</th><th>Good</th><th>Bad</th></tr></thead><tbody><tr><td>Hash the URL</td><td>Take the first 7 base62 characters of MD5 or SHA-256 of the long URL.</td><td>The same URL always gets the same key, so no duplicates.</td><td>Collisions: check, and on a clash re-hash with a salt and retry.</td></tr><tr><td>Counter + base62</td><td>A global counter; encode each new number in base62.</td><td>No collisions; keys are as short as possible.</td><td>One counter is a bottleneck and a single point of failure, and sequential keys can be enumerated.</td></tr><tr><td>Counter ranges</td><td>Each server leases a block (say 1,000 numbers) from a coordinator.</td><td>No per-request coordination.</td><td>A crashed server wastes its block, which is fine. Keys are still guessable unless scrambled.</td></tr><tr><td>Pre-generated pool</td><td>A key generation service creates random unused keys offline; servers take batches.</td><td>No collision check at write time; random, unguessable keys.</td><td>An extra service, and the pool must not run dry.</td></tr></tbody></table></div>
+<p>Collision odds for the hash approach: with 6 billion keys in a space of 3.5 trillion, each new key has about a 0.17% chance of hitting an existing one. One retry fixes nearly all of them, so hashing works fine. A common interview answer is <strong>counter ranges with the numbers scrambled</strong> (for example by a reversible bit shuffle) so the keys look random, or a <strong>pre-generated pool</strong>.</p>
+
+<h2>General-purpose IDs</h2>
+<p>The same problem shows up everywhere you need unique IDs without a central database sequence:</p>
+<ul>
+<li><strong>UUID v4:</strong> 128 random bits, no coordination at all. But it's long, and random inserts scatter across a B-tree index and slow down writes.</li>
+<li><strong>UUID v7 / ULID:</strong> a timestamp prefix plus randomness, so IDs sort roughly by creation time and insert at the "end" of the index.</li>
+<li><strong>Snowflake</strong> (Twitter's scheme): a 64-bit integer made of 41 bits of milliseconds, 10 bits of machine ID and 12 bits of sequence. That's 4,096 IDs per millisecond per machine, time-ordered, with no coordination beyond assigning machine IDs. In base62 it's 11 characters, too long for short links but ideal for posts and messages.</li>
+</ul>
+
+<h2>The redirect path</h2>
+<ul>
+<li><strong>301 or 302?</strong> A <code>301 Moved Permanently</code> lets browsers and CDNs cache the redirect, which saves load but hides repeat clicks from you. A <code>302 Found</code> sends every click through your servers, so you can count them. Use 302 if analytics matter.</li>
+<li><strong>Cache:</strong> cache-aside in Redis keyed by the short key. Traffic follows a power law, so a cache holding the hottest few percent of links serves 90%+ of redirects, and the database sees roughly 1,200 reads per second at peak.</li>
+<li><strong>Analytics off the hot path:</strong> don't write a row per click. Publish a click event to a log (Kafka) and aggregate counts asynchronously.</li>
+</ul>
+
+<h2>Storage</h2>
+<p>The data is a simple mapping looked up by primary key, with no joins, so a key-value store (DynamoDB, Cassandra) fits naturally and partitions by key. PostgreSQL works too at this size: 3 TB over five years is manageable with a few shards. Store <code>short_key</code> (primary key), <code>long_url</code>, <code>owner_id</code>, <code>created_at</code> and <code>expires_at</code>. Expired links can be deleted lazily on read and by a periodic cleanup job.</p>
+
+<h2>Abuse</h2>
+<p>Shorteners attract spam and phishing. Rate-limit link creation per user and per IP (see <a href="rate-limiting.html">rate limiting</a>, including how to keep counters consistent across N servers), check new URLs against a malware blocklist, and make custom aliases a logged-in feature.</p>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Estimate QPS and storage, and size the key space.</li>
+<li>Compare at least two key-generation schemes and pick one.</li>
+<li>Choose 301 or 302 and explain the analytics trade-off.</li>
+<li>Cache the redirect path and estimate the hit rate.</li>
+<li>Rate-limit creation, and move analytics off the hot path.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Model it in the sandbox</h2>
+  <p>Set the traffic from your estimate, then build the read and write paths and see which component turns red first.</p>
+  <a class="cta" href="../index.html#sandbox">Open the sandbox</a>
+</section>
+<h2>Further reading</h2>
+<ul>
+<li>Alex Xu, <em>System Design Interview: An Insider's Guide</em>, volumes 1 and 2. Worked case studies in interview format.</li>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly). The standard book on replication, partitioning and consistency.</li>
+<li><a href="https://sre.google/sre-book/table-of-contents/">Site Reliability Engineering</a>, Google's free book on running reliable systems.</li>
+<li><a href="https://aws.amazon.com/builders-library/">The Amazon Builders' Library</a>: practical articles on timeouts, retries, caching and load shedding.</li>
+<li><a href="https://github.com/donnemartin/system-design-primer">The System Design Primer</a>: a broad, community-maintained overview.</li>
+</ul>
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="sharding.html"><span class="label">Previous</span><b>Sharding and consistent hashing</b></a><a class="next" href="news-feed.html"><span class="label">Next</span><b>News feed and fan-out</b></a></nav>
+</main>
+</body>
+</html>

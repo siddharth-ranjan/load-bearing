@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Elevator system: state machine and scheduling | Load/Bearing</title>
+<meta name="description" content="Model each car as a state machine that refuses illegal moves, and keep the dispatch policy swappable.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">Low-level design · 22 of 22</span>
+  <h1>Elevator system: state machine and scheduling</h1>
+  <p class="dek">Model each car as a state machine that refuses illegal moves, and keep the dispatch policy swappable.</p>
+  <div class="meta"><span>3 min read</span></div>
+</header>
+<article class="wrap">
+
+<p>The elevator problem has two parts that interviewers probe separately: the <strong>state machine</strong> for one car (what it may do next) and the <strong>scheduling</strong> across cars (which car answers a call). Keeping them separate is most of the design.</p>
+
+<h2>Requirements to confirm</h2>
+<ul>
+<li>N cars, M floors. <strong>Hall calls</strong> (someone on floor 6 presses "down") and <strong>car calls</strong> (someone inside presses 2).</li>
+<li>Doors must be closed while moving. A car can be taken out of service.</li>
+<li>Out of scope unless asked: weight limits, express zones, emergency modes.</li>
+</ul>
+
+<h2>The state machine</h2>
+<div class="table"><table><thead><tr><th>From</th><th>Allowed next states</th></tr></thead><tbody><tr><td>IDLE</td><td>MOVING_UP, MOVING_DOWN, DOORS_OPEN, OUT_OF_SERVICE</td></tr><tr><td>MOVING_UP</td><td>DOORS_OPEN (arrived at a stop), OUT_OF_SERVICE</td></tr><tr><td>MOVING_DOWN</td><td>DOORS_OPEN, OUT_OF_SERVICE</td></tr><tr><td>DOORS_OPEN</td><td>DOORS_CLOSING</td></tr><tr><td>DOORS_CLOSING</td><td>DOORS_OPEN (something in the way), IDLE, MOVING_UP, MOVING_DOWN</td></tr><tr><td>OUT_OF_SERVICE</td><td>IDLE</td></tr></tbody></table></div>
+<p>The illegal transitions are the interesting part: moving with the doors open (<code>DOORS_OPEN → MOVING_*</code>), reversing direction without stopping (<code>MOVING_UP → MOVING_DOWN</code>), and moving straight out of maintenance. Encode the table once and enforce it in one place:</p>
+<pre class="code" data-lang="java"><code>enum State {
+    IDLE, MOVING_UP, MOVING_DOWN, DOORS_OPEN, DOORS_CLOSING, OUT_OF_SERVICE;
+
+    private static final Map&lt;State, Set&lt;State&gt;&gt; NEXT = new EnumMap&lt;&gt;(State.class);
+    static {
+        NEXT.put(IDLE,           EnumSet.of(MOVING_UP, MOVING_DOWN, DOORS_OPEN, OUT_OF_SERVICE));
+        NEXT.put(MOVING_UP,      EnumSet.of(DOORS_OPEN, OUT_OF_SERVICE));
+        NEXT.put(MOVING_DOWN,    EnumSet.of(DOORS_OPEN, OUT_OF_SERVICE));
+        NEXT.put(DOORS_OPEN,     EnumSet.of(DOORS_CLOSING));
+        NEXT.put(DOORS_CLOSING,  EnumSet.of(DOORS_OPEN, IDLE, MOVING_UP, MOVING_DOWN));
+        NEXT.put(OUT_OF_SERVICE, EnumSet.of(IDLE));
+    }
+
+    boolean canGoTo(State next) { return NEXT.get(this).contains(next); }
+}</code></pre>
+
+<h2>One car: the LOOK algorithm</h2>
+<p>First-come-first-served makes a car zigzag. The classic fix comes from disk scheduling. <strong>SCAN</strong> keeps moving in one direction to the end of the shaft, serving stops on the way, then reverses. <strong>LOOK</strong> reverses as soon as there are no more stops ahead, which is what real elevators do. Two sorted sets of stops, above and below the car, make "next stop in this direction" an O(log n) lookup:</p>
+<pre class="code" data-lang="java"><code>final class Elevator {
+    private int floor;
+    private State state = State.IDLE;
+    private final TreeSet&lt;Integer&gt; stopsAbove = new TreeSet&lt;&gt;();
+    private final TreeSet&lt;Integer&gt; stopsBelow = new TreeSet&lt;&gt;();
+
+    synchronized void addStop(int target) {
+        if (target &gt; floor) stopsAbove.add(target);
+        else if (target &lt; floor) stopsBelow.add(target);
+        // target == floor: open the doors (omitted)
+    }
+
+    /** LOOK: keep going while there are stops ahead in this direction, then reverse. */
+    synchronized OptionalInt nextStop() {
+        boolean down = state == State.MOVING_DOWN;
+        Integer next = down ? stopsBelow.floor(floor) : stopsAbove.ceiling(floor);
+        if (next == null) next = down ? stopsAbove.ceiling(floor) : stopsBelow.floor(floor);
+        return next == null ? OptionalInt.empty() : OptionalInt.of(next);
+    }
+
+    synchronized void transition(State to) {
+        if (!state.canGoTo(to)) throw new IllegalStateException(state + &quot; -&gt; &quot; + to + &quot; is not allowed&quot;);
+        state = to;
+    }
+}</code></pre>
+
+<h2>Many cars: a swappable dispatch strategy</h2>
+<p>Which car should answer a hall call? A good default: the nearest car that is idle or already heading towards the caller in the same direction, with a penalty for cars that would have to turn around. Real buildings change policy by time of day, sending idle cars to the lobby in the morning rush, so dispatch is a <a href="solid-patterns.html">strategy</a>:</p>
+<pre class="code" data-lang="java"><code>enum Direction { UP, DOWN }
+record HallCall(int floor, Direction direction) {}
+// Elevator also exposes floor(), isIdle(), inService() and isHeadingTowards(call); omitted above.
+
+interface DispatchStrategy { Elevator choose(HallCall call, List&lt;Elevator&gt; cars); }
+
+final class NearestCompatible implements DispatchStrategy {
+    private static final int TURNAROUND_PENALTY = 100;
+
+    public Elevator choose(HallCall call, List&lt;Elevator&gt; cars) {
+        return cars.stream()
+                .filter(Elevator::inService)
+                .min(Comparator.comparingInt(car -&gt; cost(car, call)))
+                .orElseThrow(() -&gt; new IllegalStateException(&quot;no elevator in service&quot;));
+    }
+
+    // Idle cars, or cars already heading to the caller in the caller&#x27;s direction, are cheapest.
+    private int cost(Elevator car, HallCall call) {
+        int distance = Math.abs(car.floor() - call.floor());
+        return car.isIdle() || car.isHeadingTowards(call) ? distance : distance + TURNAROUND_PENALTY;
+    }
+}
+
+// Swap the policy without touching the cars:
+// building.setDispatch(isMorningPeak ? new LobbyFirst() : new NearestCompatible());</code></pre>
+
+<h2>Concurrency</h2>
+<p>Buttons are pressed from many places at once. The simplest safe structure: each car is driven by its own single-threaded controller, an event loop that takes stops from a thread-safe queue, so a car's state is only ever changed by one thread. The dispatcher only adds stops to cars. With <code>synchronized</code> methods on the car, as above, the state machine stays consistent either way.</p>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Separate per-car state from dispatch across cars.</li>
+<li>Write the transition table, and name the illegal transitions.</li>
+<li>Enforce transitions in one method that throws.</li>
+<li>Explain SCAN vs LOOK, implemented with sorted sets.</li>
+<li>Make dispatch a strategy, and say how you'd swap it.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Exercise</h2>
+  <p>Write the <code>State</code> enum and a test that every illegal transition throws. Then simulate one car with stops at floors 5, 2 and 8 starting from floor 3 going up, and check that LOOK visits 5, 8, then 2.</p>
+</section>
+<h2>Further reading</h2>
+<ul>
+<li>Eric Freeman and Elisabeth Robson, <em>Head First Design Patterns</em> (O'Reilly). The friendliest introduction to the classic patterns.</li>
+<li><a href="https://refactoring.guru/design-patterns">Refactoring.Guru: design patterns</a>, with diagrams and Java examples for each pattern.</li>
+<li>Joshua Bloch, <em>Effective Java</em>. Idiomatic Java, including builders, immutability and concurrency.</li>
+</ul>
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="splitwise.html"><span class="label">Previous</span><b>Splitwise: expenses, splits and settling up</b></a></nav>
+</main>
+</body>
+</html>

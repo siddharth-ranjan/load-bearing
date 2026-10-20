@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Monitoring and alerting systems | Load/Bearing</title>
+<meta name="description" content="Take in a flood of alerts without dropping one, collapse them into incidents a person can act on, and keep working when everything else is on fire.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">High-level design · 16 of 22</span>
+  <h1>Monitoring and alerting systems</h1>
+  <p class="dek">Take in a flood of alerts without dropping one, collapse them into incidents a person can act on, and keep working when everything else is on fire.</p>
+  <div class="meta"><span>3 min read</span></div>
+</header>
+<article class="wrap">
+
+<p>An alerting system receives alerts from monitoring tools, deduplicates and groups them, decides who to page, and keeps a history. Its hardest requirement is that it must work best exactly when everything else is failing, because that's when alert volume spikes.</p>
+
+<figure><div class="dgw"><svg class="dg" width="948" height="66" viewBox="0 0 948 66" role="img" aria-label="Receivers acknowledge only after a durable write. Partitioning by fingerprint gives each alert&#x27;s state a single owner."><path d="M120,33.0 C143.0,33.0 143.0,33.0 166,33.0"/><polygon class="head" points="166,29.0 172,33.0 166,37.0"/><path d="M284,33.0 C307.0,33.0 307.0,33.0 330,33.0"/><polygon class="head" points="330,29.0 336,33.0 330,37.0"/><path d="M448,33.0 C471.0,33.0 471.0,33.0 494,33.0"/><polygon class="head" points="494,29.0 500,33.0 494,37.0"/><path d="M612,33.0 C635.0,33.0 635.0,33.0 658,33.0"/><polygon class="head" points="658,29.0 664,33.0 658,37.0"/><path d="M776,33.0 C799.0,33.0 799.0,33.0 822,33.0"/><polygon class="head" points="822,29.0 828,33.0 822,37.0"/><g class=""><rect x="8" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="64.0" y="30.0" text-anchor="middle">SOURCES</text><text class="sub" x="64.0" y="46.0" text-anchor="middle">Prometheus, apps</text></g><g class=""><rect x="172" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="30.0" text-anchor="middle">RECEIVERS</text><text class="sub" x="228.0" y="46.0" text-anchor="middle">stateless</text></g><g class="hot"><rect x="336" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="30.0" text-anchor="middle">KAFKA</text><text class="sub" x="392.0" y="46.0" text-anchor="middle">acks=all · RF 3</text></g><g class=""><rect x="500" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="556.0" y="30.0" text-anchor="middle">DEDUPE</text><text class="sub" x="556.0" y="46.0" text-anchor="middle">by fingerprint</text></g><g class=""><rect x="664" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="720.0" y="30.0" text-anchor="middle">CORRELATE</text><text class="sub" x="720.0" y="46.0" text-anchor="middle">service graph</text></g><g class=""><rect x="828" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="884.0" y="30.0" text-anchor="middle">ROUTER</text><text class="sub" x="884.0" y="46.0" text-anchor="middle">on-call, escalation</text></g></svg></div><figcaption>Receivers acknowledge only after a durable write. Partitioning by fingerprint gives each alert's state a single owner.</figcaption></figure>
+
+<h2>Ingest: 100,000 alerts a minute, none lost</h2>
+<p>100,000 a minute is about 1,700 per second on average, and incidents produce storms ten times that. "Without losing any" means three things:</p>
+<ul>
+<li><strong>Acknowledge only after a durable write.</strong> Receivers are stateless and horizontally scaled. They return success only after Kafka has written the alert to all in-sync replicas (<code>acks=all</code>, replication factor 3).</li>
+<li><strong>Senders retry.</strong> Sources keep a local buffer and retry until they get an acknowledgement. That's at-least-once delivery, so the next stage must be idempotent: dedupe on the alert's fingerprint and timestamp.</li>
+<li><strong>Absorb storms.</strong> Kafka is the buffer, and processing can fall behind briefly without loss. Track consumer lag, because if it grows, pages arrive late.</li>
+</ul>
+
+<h2>Deduplication: key, window, state</h2>
+<ul>
+<li><strong>Key:</strong> a <strong>fingerprint</strong>, a hash of the alert's identifying labels, for example <code>alertname</code>, <code>service</code>, <code>instance</code> and <code>severity</code>, sorted. This is how Prometheus Alertmanager identifies alerts. Exclude labels that change on every firing, like a current value.</li>
+<li><strong>Window:</strong> an alert stays "open" while it keeps firing. A repeat within the window updates <code>last_seen</code> and a count instead of paging again. The alert closes when the source sends "resolved", or when it hasn't been seen for a timeout. A <em>repeat interval</em> (say 4 hours) re-notifies for alerts still open.</li>
+<li><strong>State:</strong> partition the Kafka topic by fingerprint, so one consumer owns each fingerprint and keeps its state in memory without distributed locks. Checkpoint that state to a compacted topic or Redis, so a replacement consumer can take over after a rebalance.</li>
+</ul>
+
+<h2>Correlation: from alerts to incidents</h2>
+<ul>
+<li><strong>Group by labels:</strong> alerts with the same <code>service</code> and <code>cluster</code> within a short window become one notification. Alertmanager waits briefly (<code>group_wait</code>) to collect a group before sending it.</li>
+<li><strong>Use the dependency graph:</strong> load service dependencies from tracing or a service catalog. When the database and the six APIs that call it all alert within a minute, the upstream-most failing node is the probable cause, and the rest are symptoms.</li>
+<li><strong>Inhibit symptoms:</strong> while "database down" is open, suppress "API error rate high" for its dependants (Alertmanager calls these inhibition rules). One page instead of seven.</li>
+</ul>
+
+<h2>Storage: hot, cold, retention</h2>
+<div class="table"><table><thead><tr><th>Data</th><th>Hot (fast, expensive)</th><th>Cold (cheap)</th><th>Retention</th></tr></thead><tbody><tr><td>Open alerts and incidents</td><td>In memory + PostgreSQL</td><td></td><td>Until resolved</td></tr><tr><td>Alert history</td><td>PostgreSQL or Elasticsearch, indexed by service and time</td><td>Parquet files in object storage</td><td>30 days hot, 1–2 years cold</td></tr><tr><td>Metrics</td><td>Time-series DB at full resolution</td><td>Downsampled rollups (5 min, 1 h)</td><td>15 days raw, a year of rollups</td></tr></tbody></table></div>
+<p>Partition history tables by day, so retention means dropping whole partitions, which is much cheaper than <code>DELETE</code> on a large table.</p>
+
+<h2>Monitoring the monitor</h2>
+<ul>
+<li><strong>Dead man's switch:</strong> an alert that always fires (the "Watchdog" alert in common Prometheus setups) is sent to an external service. If the heartbeat stops arriving, that service pages you through a separate path. Silence is treated as failure.</li>
+<li><strong>Independent infrastructure:</strong> run the meta-monitoring in a different region, account or provider, so it doesn't fail together with the system it watches.</li>
+<li><strong>Synthetic alerts:</strong> inject a test alert every minute and measure time from ingest to notification. That's your end-to-end health check.</li>
+<li><strong>Degrade loudly, once:</strong> when ingest lag is high, mark data as incomplete, suppress "no data" alerts that the lag itself would cause, and send one page about the alerting system rather than hundreds of false ones.</li>
+</ul>
+
+<h2>Writing it up</h2>
+<p>For a formal design document or a design-round answer, use this order: problem and users; functional and non-functional requirements; numbers; API and data model; architecture diagram; deep dives (ingest durability, dedupe state, correlation); failure modes; trade-offs and what you'd do next. See <a href="design-interview.html">running a design interview</a> for the timing.</p>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Acknowledge only after a durable, replicated write; senders retry; consumers are idempotent.</li>
+<li>Define the dedupe fingerprint, the window and who owns the state.</li>
+<li>Correlate by labels and the dependency graph; inhibit symptoms.</li>
+<li>Split hot and cold storage, with explicit retention.</li>
+<li>Monitor the monitor: dead man's switch on independent infrastructure.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Model it in the sandbox</h2>
+  <p>Set the traffic from your estimate, then build the read and write paths and see which component turns red first.</p>
+  <a class="cta" href="../index.html#sandbox">Open the sandbox</a>
+</section>
+<h2>Further reading</h2>
+<ul>
+<li>Alex Xu, <em>System Design Interview: An Insider's Guide</em>, volumes 1 and 2. Worked case studies in interview format.</li>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly). The standard book on replication, partitioning and consistency.</li>
+<li><a href="https://sre.google/sre-book/table-of-contents/">Site Reliability Engineering</a>, Google's free book on running reliable systems.</li>
+<li><a href="https://aws.amazon.com/builders-library/">The Amazon Builders' Library</a>: practical articles on timeouts, retries, caching and load shedding.</li>
+<li><a href="https://github.com/donnemartin/system-design-primer">The System Design Primer</a>: a broad, community-maintained overview.</li>
+</ul>
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="chat.html"><span class="label">Previous</span><b>Chat systems and real-time connections</b></a><a class="next" href="design-interview.html"><span class="label">Next</span><b>Running a design interview</b></a></nav>
+</main>
+</body>
+</html>

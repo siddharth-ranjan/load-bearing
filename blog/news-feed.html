@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>News feed and fan-out | Load/Bearing</title>
+<meta name="description" content="Precompute every user&#x27;s feed when someone posts, or assemble it when they open the app? The answer is both.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">High-level design · 13 of 22</span>
+  <h1>News feed and fan-out</h1>
+  <p class="dek">Precompute every user's feed when someone posts, or assemble it when they open the app? The answer is both.</p>
+  <div class="meta"><span>2 min read</span></div>
+</header>
+<article class="wrap">
+
+<p>A news feed shows each user recent posts from the accounts they follow. Users read their feed far more often than anyone posts, and some accounts have millions of followers. The core decision is when to do the work of matching posts to readers.</p>
+
+<h2>Numbers</h2>
+<div class="table"><table><thead><tr><th>Quantity</th><th>Math</th><th>Result</th></tr></thead><tbody><tr><td>Daily active users</td><td></td><td class="n">200M</td></tr><tr><td>New posts</td><td>200M × 1 per day ÷ 86,400</td><td class="n">≈ 2,300/s</td></tr><tr><td>Feed loads</td><td>200M × 10 per day ÷ 86,400</td><td class="n">≈ 23,000/s</td></tr><tr><td>Feed inserts if every post is pushed</td><td>2,300 × 200 average followers</td><td class="n">≈ 460,000/s</td></tr></tbody></table></div>
+
+<h2>Fan-out on write (push)</h2>
+<p>When someone posts, a worker looks up their followers and adds the post ID to each follower's precomputed feed, typically a capped Redis sorted set of the newest few hundred IDs. Reading a feed is then a single cheap lookup.</p>
+<figure><div class="dgw"><svg class="dg" width="620" height="130" viewBox="0 0 620 130" role="img" aria-label="Push: the post is stored once, and its ID is copied into every follower&#x27;s feed in the background."><path d="M120,65.0 C143.0,65.0 143.0,33.0 166,33.0"/><polygon class="head" points="166,29.0 172,33.0 166,37.0"/><path d="M120,65.0 C143.0,65.0 143.0,97.0 166,97.0"/><polygon class="head" points="166,93.0 172,97.0 166,101.0"/><path d="M284,97.0 C307.0,97.0 307.0,65.0 330,65.0"/><polygon class="head" points="330,61.0 336,65.0 330,69.0"/><path d="M448,65.0 C471.0,65.0 471.0,65.0 494,65.0"/><polygon class="head" points="494,61.0 500,65.0 494,69.0"/><g class=""><rect x="8" y="40.0" width="112" height="50" rx="5"/><text class="tag" x="64.0" y="62.0" text-anchor="middle">POST API</text><text class="sub" x="64.0" y="78.0" text-anchor="middle"></text></g><g class=""><rect x="172" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="30.0" text-anchor="middle">POSTS DB</text><text class="sub" x="228.0" y="46.0" text-anchor="middle">post rows</text></g><g class="hot"><rect x="172" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="94.0" text-anchor="middle">FANOUT QUEUE</text><text class="sub" x="228.0" y="110.0" text-anchor="middle">post id</text></g><g class=""><rect x="336" y="40.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="62.0" text-anchor="middle">FANOUT WORKERS</text><text class="sub" x="392.0" y="78.0" text-anchor="middle">batch by follower</text></g><g class=""><rect x="500" y="40.0" width="112" height="50" rx="5"/><text class="tag" x="556.0" y="62.0" text-anchor="middle">FEED CACHE</text><text class="sub" x="556.0" y="78.0" text-anchor="middle">user → [post ids]</text></g></svg></div><figcaption>Push: the post is stored once, and its ID is copied into every follower's feed in the background.</figcaption></figure>
+<p><strong>Where it breaks:</strong> a celebrity with 10 million followers creates 10 million feed writes per post, and each of those followers' feeds updates late. Most of that work is wasted on followers who won't open the app today. Deletes and edits have to be fanned out too.</p>
+
+<h2>Fan-out on read (pull)</h2>
+<p>Store only each author's own posts. When a user opens the feed, fetch recent posts from everyone they follow and merge them, a k-way merge by time or score.</p>
+<p><strong>Where it breaks:</strong> a user who follows 2,000 accounts triggers 2,000 lookups per feed load, at 23,000 loads per second. Reads become slow and expensive, and that's the operation users do most.</p>
+
+<h2>The hybrid most systems use</h2>
+<ul>
+<li><strong>Push</strong> for ordinary authors, who have hundreds or thousands of followers.</li>
+<li><strong>Pull</strong> for celebrities above a threshold (say 100,000 followers). Their recent posts are cached hot, because millions of readers want the same few posts.</li>
+<li>At read time, merge the precomputed feed with recent posts from the celebrities that user follows.</li>
+<li>Skip pushing to inactive users, and build their feed on demand when they return.</li>
+</ul>
+<p>That answers the celebrity question: a post by an account with 10M followers costs one write, plus a cache entry that millions of feed reads share.</p>
+
+<h2>Storage</h2>
+<ul>
+<li><strong>Posts:</strong> sharded by post ID or author ID. Feed caches hold only IDs, and posts are fetched in bulk (multi-get) from a post cache, so an edit updates one place.</li>
+<li><strong>Follow graph:</strong> store both directions, <code>followers(author)</code> for fan-out and <code>following(user)</code> for pull, because each is queried by a different key.</li>
+<li><strong>Feed cache:</strong> keep only the last few hundred IDs per user. Older pages come from a slower path.</li>
+</ul>
+
+<h2>Ranking and pagination</h2>
+<p>Chronological feeds sort by time. Ranked feeds first gather candidates (pushed IDs plus pulled celebrity posts), then score them with a model and keep the best. Paginate with a <strong>cursor</strong> (the last ID or score seen), not an offset: new posts arriving at the top would make offset pages shift and repeat.</p>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Estimate posts per second, feed reads per second and average followers.</li>
+<li>Explain push and pull, and where each breaks.</li>
+<li>Propose the hybrid with a celebrity threshold.</li>
+<li>Store IDs in feeds and fetch post bodies in bulk.</li>
+<li>Use cursor pagination, and say how ranking fits in.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Model it in the sandbox</h2>
+  <p>Set the traffic from your estimate, then build the read and write paths and see which component turns red first.</p>
+  <a class="cta" href="../index.html#sandbox">Open the sandbox</a>
+</section>
+<h2>Further reading</h2>
+<ul>
+<li>Alex Xu, <em>System Design Interview: An Insider's Guide</em>, volumes 1 and 2. Worked case studies in interview format.</li>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly). The standard book on replication, partitioning and consistency.</li>
+<li><a href="https://sre.google/sre-book/table-of-contents/">Site Reliability Engineering</a>, Google's free book on running reliable systems.</li>
+<li><a href="https://aws.amazon.com/builders-library/">The Amazon Builders' Library</a>: practical articles on timeouts, retries, caching and load shedding.</li>
+<li><a href="https://github.com/donnemartin/system-design-primer">The System Design Primer</a>: a broad, community-maintained overview.</li>
+</ul>
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="url-shortener.html"><span class="label">Previous</span><b>URL shortener and ID generation</b></a><a class="next" href="notifications.html"><span class="label">Next</span><b>Notification service</b></a></nav>
+</main>
+</body>
+</html>

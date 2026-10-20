@@ -793,16 +793,42 @@ dict(slug="sharding", short="Sharding", title="Sharding and consistent hashing",
 </ul>
 """),
 ]
+for _p in POSTS:
+    _p["section"] = "Fundamentals"
 
-READING = """
-<h2>Further reading</h2>
-<ul>
+
+def code(src, lang="java"):
+    return f'<pre class="code" data-lang="{lang}"><code>{html.escape(src.strip())}</code></pre>'
+
+
+# Case studies and low-level design live in their own module to keep this file readable.
+import sys  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from posts_design import design_posts  # noqa: E402
+
+POSTS += design_posts(diagram=diagram, table=table, B=B, code=code)
+
+SECTIONS = [
+    ("Fundamentals", "The building blocks you place in the game, in the order the levels need them."),
+    ("HLD", "High-level design case studies. Each one combines the fundamentals into a full system."),
+    ("LLD", "Low-level design: object models, design patterns and working Java code you can write in 90 minutes."),
+]
+SECTION_TITLES = {"Fundamentals": "Fundamentals", "HLD": "High-level design", "LLD": "Low-level design"}
+
+_FUND = """
 <li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly). The standard book on replication, partitioning and consistency.</li>
 <li><a href="https://sre.google/sre-book/table-of-contents/">Site Reliability Engineering</a>, Google's free book on running reliable systems.</li>
 <li><a href="https://aws.amazon.com/builders-library/">The Amazon Builders' Library</a>: practical articles on timeouts, retries, caching and load shedding.</li>
-<li><a href="https://github.com/donnemartin/system-design-primer">The System Design Primer</a>: a broad, community-maintained overview.</li>
-</ul>
-"""
+<li><a href="https://github.com/donnemartin/system-design-primer">The System Design Primer</a>: a broad, community-maintained overview.</li>"""
+READING = {
+    "Fundamentals": _FUND,
+    "HLD": """
+<li>Alex Xu, <em>System Design Interview: An Insider's Guide</em>, volumes 1 and 2. Worked case studies in interview format.</li>""" + _FUND,
+    "LLD": """
+<li>Eric Freeman and Elisabeth Robson, <em>Head First Design Patterns</em> (O'Reilly). The friendliest introduction to the classic patterns.</li>
+<li><a href="https://refactoring.guru/design-patterns">Refactoring.Guru: design patterns</a>, with diagrams and Java examples for each pattern.</li>
+<li>Joshua Bloch, <em>Effective Java</em>. Idiomatic Java, including builders, immutability and concurrency.</li>""",
+}
 
 
 def words(s):
@@ -836,13 +862,38 @@ def level_links(ids):
     return ", ".join(f'<a href="../index.html#{i}">{LEVELS[i][0]} · {LEVELS[i][1]}</a>' for i in ids)
 
 
+def practice_box(p):
+    if p.get("practice") == "sandbox":
+        return """<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Model it in the sandbox</h2>
+  <p>Set the traffic from your estimate, then build the read and write paths and see which component turns red first.</p>
+  <a class="cta" href="../index.html#sandbox">Open the sandbox</a>
+</section>"""
+    if p.get("practice"):
+        lv = LEVELS[p["practice"]]
+        return f"""<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Level {lv[0]}: {lv[1]}</h2>
+  <p>Put this into practice against live traffic. Your progress in the game is saved in your browser.</p>
+  <a class="cta" href="../index.html#{p["practice"]}">Play level {lv[0]}</a>
+</section>"""
+    if p.get("exercise"):
+        return f"""<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Exercise</h2>
+  {p["exercise"]}
+</section>"""
+    return ""
+
+
 def build():
     OUT.mkdir(exist_ok=True)
     for i, p in enumerate(POSTS):
         mins = max(1, round(words(p["body"]) / 230))
         prev = POSTS[i - 1] if i > 0 else None
         nxt = POSTS[i + 1] if i + 1 < len(POSTS) else None
-        lv = LEVELS[p["practice"]]
+        used = f'<span>Used in: {level_links(p["levels"])}</span>' if p.get("levels") else ""
         pager = '<nav class="pager wrap" aria-label="More topics">'
         if prev:
             pager += f'<a href="{prev["slug"]}.html"><span class="label">Previous</span><b>{prev["title"]}</b></a>'
@@ -851,38 +902,40 @@ def build():
         pager += "</nav>"
         body = f"""<main>
 <header class="post wrap">
-  <span class="label">Topic {i + 1:02d} of {len(POSTS)}</span>
+  <span class="label">{SECTION_TITLES[p["section"]]} · {i + 1:02d} of {len(POSTS)}</span>
   <h1>{p["title"]}</h1>
   <p class="dek">{p["dek"]}</p>
-  <div class="meta"><span>{mins} min read</span><span>Used in: {level_links(p["levels"])}</span></div>
+  <div class="meta"><span>{mins} min read</span>{used}</div>
 </header>
 <article class="wrap">
 {p["body"]}
-<section class="game">
-  <span class="label">Practise it</span>
-  <h2>Level {lv[0]}: {lv[1]}</h2>
-  <p>Put this into practice against live traffic. Your progress in the game is saved in your browser.</p>
-  <a class="cta" href="../index.html#{p["practice"]}">Play level {lv[0]}</a>
-</section>
-{READING}
+{practice_box(p)}
+<h2>Further reading</h2>
+<ul>{READING[p["section"]]}
+</ul>
 </article>
 {pager}
 </main>"""
         (OUT / f'{p["slug"]}.html').write_text(shell(f'{p["title"]} | Load/Bearing', p["dek"], body))
 
-    items = "".join(
-        f'<li><a href="{p["slug"]}.html"><span class="num">{i + 1:02d}</span><h2>{p["title"]}</h2>'
-        f'<span class="lv">Level {", ".join(str(LEVELS[l][0]) for l in p["levels"])}</span><p>{p["dek"]}</p></a></li>'
-        for i, p in enumerate(POSTS))
+    def item(i, p):
+        tag = f'Level {", ".join(str(LEVELS[l][0]) for l in p["levels"])}' if p.get("levels") else ""
+        return (f'<li><a href="{p["slug"]}.html"><span class="num">{i + 1:02d}</span><h2>{p["title"]}</h2>'
+                f'<span class="lv">{tag}</span><p>{p["dek"]}</p></a></li>')
+    groups = ""
+    for key, blurb in SECTIONS:
+        rows = "".join(item(i, p) for i, p in enumerate(POSTS) if p["section"] == key)
+        groups += (f'<section class="sec"><div class="sechead"><h2>{SECTION_TITLES[key]}</h2><p>{blurb}</p></div>'
+                   f'<ol class="list">{rows}</ol></section>')
     body = f"""<main class="wrap">
 <section class="intro">
   <span class="label">Field notes</span>
   <h1>The ideas behind every box</h1>
-  <p>One article per building block you place in the game, in the order the levels need them. Read one before a level, or after it to see what the simulation was modelling.</p>
+  <p>Start with the fundamentals: one article per building block you place in the game. Then see how they combine in full case studies, and how to write the code in a low-level design round.</p>
 </section>
-<ol class="list">{items}</ol>
+{groups}
 </main>"""
-    (OUT / "index.html").write_text(shell("Field Notes | Load/Bearing", "Articles on the system design concepts behind each level of Load/Bearing.", body, "index"))
+    (OUT / "index.html").write_text(shell("Field Notes | Load/Bearing", "System design articles: fundamentals, high-level case studies and low-level design in Java.", body, "index"))
     print(f"wrote {len(POSTS) + 1} pages to {OUT}")
 
 

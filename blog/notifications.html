@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Notification service | Load/Bearing</title>
+<meta name="description" content="Deliver each message once, on the right channel, at the right time, even though every provider and network in the path can fail.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">High-level design · 14 of 22</span>
+  <h1>Notification service</h1>
+  <p class="dek">Deliver each message once, on the right channel, at the right time, even though every provider and network in the path can fail.</p>
+  <div class="meta"><span>3 min read</span></div>
+</header>
+<article class="wrap">
+
+<p>Every product grows a notification system: order updates by push, receipts by email, one-time passwords by SMS. Dozens of services want to notify users, so it pays to build one shared service that handles preferences, templates, retries and provider quirks in one place.</p>
+
+<figure><div class="dgw"><svg class="dg" width="784" height="194" viewBox="0 0 784 194" role="img" aria-label="Producers call one API. A router applies preferences and templates, then each channel has its own queue and workers."><path d="M120,97.0 C143.0,97.0 143.0,97.0 166,97.0"/><polygon class="head" points="166,93.0 172,97.0 166,101.0"/><path d="M284,97.0 C307.0,97.0 307.0,97.0 330,97.0"/><polygon class="head" points="330,93.0 336,97.0 330,101.0"/><path d="M448,97.0 C471.0,97.0 471.0,97.0 494,97.0"/><polygon class="head" points="494,93.0 500,97.0 494,101.0"/><path d="M612,97.0 C635.0,97.0 635.0,33.0 658,33.0"/><polygon class="head" points="658,29.0 664,33.0 658,37.0"/><path d="M612,97.0 C635.0,97.0 635.0,97.0 658,97.0"/><polygon class="head" points="658,93.0 664,97.0 658,101.0"/><path d="M612,97.0 C635.0,97.0 635.0,161.0 658,161.0"/><polygon class="head" points="658,157.0 664,161.0 658,165.0"/><g class=""><rect x="8" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="64.0" y="94.0" text-anchor="middle">SERVICES</text><text class="sub" x="64.0" y="110.0" text-anchor="middle">order, auth, social</text></g><g class="hot"><rect x="172" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="94.0" text-anchor="middle">NOTIFY API</text><text class="sub" x="228.0" y="110.0" text-anchor="middle">validate + dedupe</text></g><g class=""><rect x="336" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="94.0" text-anchor="middle">EVENT LOG</text><text class="sub" x="392.0" y="110.0" text-anchor="middle">Kafka</text></g><g class=""><rect x="500" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="556.0" y="94.0" text-anchor="middle">ROUTER</text><text class="sub" x="556.0" y="110.0" text-anchor="middle">prefs, templates</text></g><g class=""><rect x="664" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="720.0" y="30.0" text-anchor="middle">PUSH Q</text><text class="sub" x="720.0" y="46.0" text-anchor="middle">APNs / FCM</text></g><g class=""><rect x="664" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="720.0" y="94.0" text-anchor="middle">EMAIL Q</text><text class="sub" x="720.0" y="110.0" text-anchor="middle">SES / SendGrid</text></g><g class=""><rect x="664" y="136.0" width="112" height="50" rx="5"/><text class="tag" x="720.0" y="158.0" text-anchor="middle">SMS Q</text><text class="sub" x="720.0" y="174.0" text-anchor="middle">Twilio</text></g></svg></div><figcaption>Producers call one API. A router applies preferences and templates, then each channel has its own queue and workers.</figcaption></figure>
+
+<h2>The pipeline</h2>
+<ol>
+<li><strong>API:</strong> producers send an event, not a finished message: "order 812 shipped for user 42", with an <strong>idempotency key</strong>. The API stores the key and rejects repeats.</li>
+<li><strong>Durable log:</strong> accepted events go to Kafka, so a slow provider never blocks the services calling the API.</li>
+<li><strong>Router:</strong> loads the user's preferences and contact details, chooses channels, renders templates, and applies quiet hours and frequency caps.</li>
+<li><strong>Channel queues and workers:</strong> one queue per channel, so a slow SMS provider can't delay push notifications. Workers call providers within each provider's rate limits.</li>
+<li><strong>Status store:</strong> one record per notification and channel attempt: queued, sent, delivered, opened, failed.</li>
+</ol>
+<p>Give one-time passwords and security alerts their own high-priority queue. Marketing can wait; a login code can't.</p>
+
+<h2>Deduplicating across channels</h2>
+<p>Duplicates come from two places: producers sending the same event twice, and the router choosing several channels for one event.</p>
+<ul>
+<li><strong>Producer duplicates:</strong> dedupe on the idempotency key (or on <code>user_id + event_type + entity_id</code>) with a unique constraint or a Redis <code>SET NX</code> with a TTL.</li>
+<li><strong>Channel policy:</strong> decide per event type, not per channel. For example: send push first; if it isn't opened within 10 minutes, send email; never send SMS for the same event. One notification record per event, with its channel attempts underneath, makes that easy to enforce.</li>
+<li><strong>Per-channel key:</strong> <code>(notification_id, channel)</code> is unique in the status store, so a worker that picks up the same job twice finds it already sent.</li>
+</ul>
+
+<h2>Retries without double notifying</h2>
+<ul>
+<li>Record the attempt as <em>sending</em> before calling the provider and <em>sent</em> afterwards. A retry checks that state first.</li>
+<li>Retry only errors that can succeed later: timeouts, HTTP 5xx and 429. Don't retry 4xx errors like an invalid phone number or an unregistered device token. Use exponential backoff with jitter, cap the attempts, then send the job to a dead-letter queue.</li>
+<li>The hard case is a timeout after the provider has already accepted the message. You can't know whether it was sent. Where providers support it, a collapse key (APNs <code>apns-collapse-id</code>, FCM <code>collapse_key</code>) makes the device replace duplicates instead of showing two. For the rest, accept a rare duplicate rather than risk never sending.</li>
+<li>Producers should publish through a <strong>transactional outbox</strong> so "order shipped" is only announced if the order update committed.</li>
+</ul>
+
+<h2>The 10-million-follower broadcast</h2>
+<p>"Notify everyone who follows this account" must not become one request with 10 million recipients. A broadcast job pages through followers in batches of a few thousand and enqueues those batches at a rate the providers allow, often spread over minutes. Low-priority queues absorb it without delaying transactional messages. Collapse repeated broadcasts ("12 people liked your post") rather than sending one notification each.</p>
+
+<h2>Preferences and the law</h2>
+<p>Every channel needs per-category opt-outs, an unsubscribe link in marketing email, quiet hours in the user's time zone, and a cap on messages per day. These belong in the router, so no producing service can bypass them.</p>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>One API taking events plus idempotency keys, then a durable log.</li>
+<li>Separate queues per channel and per priority.</li>
+<li>A channel policy and unique keys to prevent duplicates.</li>
+<li>Retry rules: what's retryable, backoff, dead-letter queue, collapse keys.</li>
+<li>Batch big broadcasts, and enforce preferences centrally.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Model it in the sandbox</h2>
+  <p>Set the traffic from your estimate, then build the read and write paths and see which component turns red first.</p>
+  <a class="cta" href="../index.html#sandbox">Open the sandbox</a>
+</section>
+<h2>Further reading</h2>
+<ul>
+<li>Alex Xu, <em>System Design Interview: An Insider's Guide</em>, volumes 1 and 2. Worked case studies in interview format.</li>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly). The standard book on replication, partitioning and consistency.</li>
+<li><a href="https://sre.google/sre-book/table-of-contents/">Site Reliability Engineering</a>, Google's free book on running reliable systems.</li>
+<li><a href="https://aws.amazon.com/builders-library/">The Amazon Builders' Library</a>: practical articles on timeouts, retries, caching and load shedding.</li>
+<li><a href="https://github.com/donnemartin/system-design-primer">The System Design Primer</a>: a broad, community-maintained overview.</li>
+</ul>
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="news-feed.html"><span class="label">Previous</span><b>News feed and fan-out</b></a><a class="next" href="chat.html"><span class="label">Next</span><b>Chat systems and real-time connections</b></a></nav>
+</main>
+</body>
+</html>

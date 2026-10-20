@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Running a design interview | Load/Bearing</title>
+<meta name="description" content="A system design round is graded on how you get to an answer. Here&#x27;s a sequence and a clock that keep you in control.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">High-level design · 17 of 22</span>
+  <h1>Running a design interview</h1>
+  <p class="dek">A system design round is graded on how you get to an answer. Here's a sequence and a clock that keep you in control.</p>
+  <div class="meta"><span>3 min read</span></div>
+</header>
+<article class="wrap">
+
+<p>Interviewers rarely have one right design in mind. They're watching whether you clarify the problem, put numbers on it, make reasonable choices, and explain the trade-offs. A fixed sequence keeps you from drawing boxes too early or running out of time in a deep dive.</p>
+
+<h2>The 45-minute clock</h2>
+<div class="table"><table><thead><tr><th>Minutes</th><th>Step</th><th>What you produce</th></tr></thead><tbody><tr><td class="n">0–5</td><td>Requirements</td><td>3–5 functional requirements, the non-functional ones (latency, availability, consistency), and what's out of scope</td></tr><tr><td class="n">5–10</td><td>Estimates</td><td>Users, read and write QPS, storage, bandwidth. See <a href="estimation.html">estimation</a></td></tr><tr><td class="n">10–15</td><td>API and data model</td><td>The main endpoints, and the key tables or collections with their keys</td></tr><tr><td class="n">15–25</td><td>High-level design</td><td>One diagram covering the whole read path and write path</td></tr><tr><td class="n">25–40</td><td>Deep dives</td><td>Two or three hard parts: scaling the bottleneck, consistency, failure handling</td></tr><tr><td class="n">40–45</td><td>Wrap-up</td><td>Trade-offs, bottlenecks left, what you'd build next</td></tr></tbody></table></div>
+
+<h2>Each step, in practice</h2>
+<h3>Requirements</h3>
+<p>Ask, then write down what you agreed. "Do we need custom aliases? Analytics? How long do links live?" Then say which requirement dominates: "Redirects must be fast and almost never fail; creation can be slower."</p>
+<h3>Estimates</h3>
+<p>Round aggressively and say so. The aim is to learn which component is stressed. Finish with a conclusion: "So reads are 100 times writes, and the database can't serve 12,000 lookups a second alone. That means a cache."</p>
+<h3>API and data model</h3>
+<p>Two or three endpoints with their inputs and outputs, and the main entities with their primary keys. Choose the database here and say why (see <a href="sql-nosql.html">SQL vs NoSQL</a>).</p>
+<h3>High-level design</h3>
+<p>Draw the simplest design that meets the requirements, then walk one request through it end to end, once for a read and once for a write. Don't add Kafka, sharding or microservices until the numbers ask for them.</p>
+<h3>Deep dives</h3>
+<p>Pick the parts that are actually hard for this problem: key generation for a shortener, fan-out for a feed, connection state for chat. Interviewers often steer here, so follow their lead. For each part, give two options, choose one, and say what it costs.</p>
+<h3>Wrap-up</h3>
+<p>Name the next bottleneck and the failure you'd worry about most. That shows you know the design isn't finished.</p>
+
+<h2>Saying trade-offs well</h2>
+<div class="math">"I chose X over Y because Z.
+ It costs us W.
+ I'd revisit it if V changes."</div>
+<p>Example: "I chose fan-out on write for most users because feed reads outnumber posts ten to one. It costs us heavy write amplification for big accounts, so I pull those at read time. I'd revisit the threshold if the celebrity share of reads grows."</p>
+
+<h2>Your own project as a design answer</h2>
+<p>A system you built and can draw from memory is your strongest answer. Prepare it at two lengths:</p>
+<ul>
+<li><strong>Two minutes:</strong> the problem, the architecture in one sentence, the one hard thing you solved, and one number that shows scale or impact.</li>
+<li><strong>Ten minutes:</strong> the diagram, the request paths, three trade-offs you can defend, and three things you'd do differently now.</li>
+</ul>
+<p>Rehearse both aloud, timed, at least twice. Recording yourself once is uncomfortable and very effective.</p>
+
+<h2>Common ways to lose points</h2>
+<ul>
+<li>Drawing boxes before agreeing on requirements and numbers.</li>
+<li>Naming technologies without saying what they do for this design ("we'll use Kafka").</li>
+<li>Designing for a scale that the estimates don't support.</li>
+<li>Spending 20 minutes on one component and never covering the write path.</li>
+<li>Never mentioning failure: what happens when this box dies?</li>
+</ul>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Write down requirements and what's out of scope.</li>
+<li>State estimates and the conclusion they lead to.</li>
+<li>Walk a read and a write through the diagram.</li>
+<li>Deep-dive two hard parts, with options and costs.</li>
+<li>End with trade-offs, bottlenecks and next steps.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Model it in the sandbox</h2>
+  <p>Set the traffic from your estimate, then build the read and write paths and see which component turns red first.</p>
+  <a class="cta" href="../index.html#sandbox">Open the sandbox</a>
+</section>
+<h2>Further reading</h2>
+<ul>
+<li>Alex Xu, <em>System Design Interview: An Insider's Guide</em>, volumes 1 and 2. Worked case studies in interview format.</li>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly). The standard book on replication, partitioning and consistency.</li>
+<li><a href="https://sre.google/sre-book/table-of-contents/">Site Reliability Engineering</a>, Google's free book on running reliable systems.</li>
+<li><a href="https://aws.amazon.com/builders-library/">The Amazon Builders' Library</a>: practical articles on timeouts, retries, caching and load shedding.</li>
+<li><a href="https://github.com/donnemartin/system-design-primer">The System Design Primer</a>: a broad, community-maintained overview.</li>
+</ul>
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="monitoring.html"><span class="label">Previous</span><b>Monitoring and alerting systems</b></a><a class="next" href="solid-patterns.html"><span class="label">Next</span><b>SOLID and the six patterns worth knowing</b></a></nav>
+</main>
+</body>
+</html>

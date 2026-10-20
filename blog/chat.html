@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Chat systems and real-time connections | Load/Bearing</title>
+<meta name="description" content="Millions of open connections, messages that must arrive in order, and users who are offline half the time.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">High-level design · 15 of 22</span>
+  <h1>Chat systems and real-time connections</h1>
+  <p class="dek">Millions of open connections, messages that must arrive in order, and users who are offline half the time.</p>
+  <div class="meta"><span>3 min read</span></div>
+</header>
+<article class="wrap">
+
+<p>A chat system looks simple: send a message, the other person sees it. Under the hood it needs persistent connections to millions of devices, a way to find which server holds each user's connection, ordering within each conversation, and a plan for everyone who is offline.</p>
+
+<h2>Getting messages to the device</h2>
+<div class="table"><table><thead><tr><th>Transport</th><th>How</th><th>Fits</th></tr></thead><tbody><tr><td>Short polling</td><td>The client asks for new messages every few seconds.</td><td>Simple, but slow and wasteful.</td></tr><tr><td>Long polling</td><td>The server holds the request open until a message arrives or it times out.</td><td>Works everywhere, but reconnects after every message.</td></tr><tr><td>Server-sent events</td><td>One long HTTP response streams events, server to client only.</td><td>Live feeds and notifications.</td></tr><tr><td>WebSocket</td><td>One persistent, two-way connection.</td><td>Chat, multiplayer, collaborative editing.</td></tr></tbody></table></div>
+<p>Chat uses WebSockets. Mobile apps also use push notifications (APNs, FCM) to wake the app when it's in the background.</p>
+
+<figure><div class="dgw"><svg class="dg" width="784" height="66" viewBox="0 0 784 66" role="img" aria-label="The chat service saves the message, looks up which gateway holds the recipient&#x27;s connection in the session registry, and forwards it there."><path d="M120,33.0 C143.0,33.0 143.0,33.0 166,33.0"/><polygon class="head" points="166,29.0 172,33.0 166,37.0"/><path d="M284,33.0 C307.0,33.0 307.0,33.0 330,33.0"/><polygon class="head" points="330,29.0 336,33.0 330,37.0"/><path d="M448,33.0 C471.0,33.0 471.0,33.0 494,33.0"/><polygon class="head" points="494,29.0 500,33.0 494,37.0"/><path d="M612,33.0 C635.0,33.0 635.0,33.0 658,33.0"/><polygon class="head" points="658,29.0 664,33.0 658,37.0"/><g class=""><rect x="8" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="64.0" y="30.0" text-anchor="middle">CLIENT A</text><text class="sub" x="64.0" y="46.0" text-anchor="middle"></text></g><g class=""><rect x="172" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="30.0" text-anchor="middle">GATEWAY 1</text><text class="sub" x="228.0" y="46.0" text-anchor="middle">holds A&#x27;s socket</text></g><g class="hot"><rect x="336" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="30.0" text-anchor="middle">CHAT SERVICE</text><text class="sub" x="392.0" y="46.0" text-anchor="middle">persist + route</text></g><g class=""><rect x="500" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="556.0" y="30.0" text-anchor="middle">GATEWAY 7</text><text class="sub" x="556.0" y="46.0" text-anchor="middle">holds B&#x27;s socket</text></g><g class=""><rect x="664" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="720.0" y="30.0" text-anchor="middle">CLIENT B</text><text class="sub" x="720.0" y="46.0" text-anchor="middle"></text></g></svg></div><figcaption>The chat service saves the message, looks up which gateway holds the recipient's connection in the session registry, and forwards it there.</figcaption></figure>
+
+<h2>Where connection state lives</h2>
+<p>A WebSocket is attached to one gateway server, so the gateways are stateful and everything behind them stays stateless:</p>
+<ul>
+<li><strong>Session registry:</strong> when a client connects, its gateway writes <code>user_id → gateway_id</code> to Redis with a TTL that heartbeats refresh. A user on three devices has three entries.</li>
+<li><strong>Routing:</strong> the chat service stores the message, looks up each recipient's gateways, and publishes to those gateways, through a per-gateway channel in Redis pub/sub, an internal RPC, or a message broker.</li>
+<li><strong>Capacity:</strong> a tuned gateway holds hundreds of thousands of mostly idle connections, so 50M concurrent users need a few hundred gateways. Memory per connection is the limit.</li>
+<li><strong>Deploys and failures:</strong> when a gateway dies, its clients reconnect (with backoff and jitter, so they don't all return at once) to another gateway, which re-registers them. Clients then resync anything they missed (below).</li>
+</ul>
+
+<h2>Ordering within a conversation</h2>
+<p>You don't need global ordering, only ordering within each conversation, and client clocks can't be trusted for that.</p>
+<ul>
+<li>Give each conversation a single writer: partition by <code>conversation_id</code> (a Kafka partition or a database shard owns each conversation). That writer assigns a <strong>monotonically increasing sequence number</strong> to every message.</li>
+<li>Clients sort by sequence number and spot gaps ("I have 41 and 43, fetch 42").</li>
+<li>Clients attach a <code>client_msg_id</code> to every send, so a retry after a dropped connection doesn't post the message twice.</li>
+</ul>
+
+<h2>Storage and receipts</h2>
+<p>Messages are written constantly and read by conversation, newest first, which fits a wide-column store partitioned by <code>conversation_id</code> and sorted by sequence number (see <a href="sql-nosql.html">SQL vs NoSQL</a>). For receipts, don't store a row per message per reader. Store <strong>watermarks</strong> per member:</p>
+<div class="math">messages:  (conversation_id, seq) → sender_id, body, sent_at, client_msg_id
+receipts:  (conversation_id, user_id) → last_delivered_seq, last_read_seq
+
+message 120 is "read by everyone" when min(last_read_seq over members) ≥ 120</div>
+<p>One small write per member updates every receipt at once, and "seen by 4 of 7" in a group is a simple count.</p>
+
+<h2>Offline users</h2>
+<p>Messages are saved before delivery, so "offline" just means "not delivered yet". When a client reconnects, it sends its last seen sequence number per conversation, and the server returns everything newer. While the user has no live connection, the chat service also asks the <a href="notifications.html">notification service</a> to send a push. A per-user list of conversations with unread messages makes the inbox view cheap to load.</p>
+
+<h2>Presence and groups</h2>
+<ul>
+<li><strong>Presence</strong> ("online", "last seen") comes from heartbeats with a TTL. Broadcasting every change to every contact is expensive, so send presence only to contacts who currently have that conversation open, and fetch it on demand otherwise.</li>
+<li><strong>Small groups</strong> fan out each message to every member's gateway. <strong>Huge channels</strong> (100,000 members) switch to pull: clients fetch new messages for the channels they're viewing. It's the same trade-off as the <a href="news-feed.html">news feed</a>.</li>
+</ul>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Choose WebSockets, and say where connection state lives (a session registry).</li>
+<li>Route messages through stateless services to the right gateway.</li>
+<li>Order with per-conversation sequence numbers and a single writer; dedupe with client message IDs.</li>
+<li>Model receipts as per-member watermarks.</li>
+<li>Persist first, sync on reconnect, push to offline devices.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Model it in the sandbox</h2>
+  <p>Set the traffic from your estimate, then build the read and write paths and see which component turns red first.</p>
+  <a class="cta" href="../index.html#sandbox">Open the sandbox</a>
+</section>
+<h2>Further reading</h2>
+<ul>
+<li>Alex Xu, <em>System Design Interview: An Insider's Guide</em>, volumes 1 and 2. Worked case studies in interview format.</li>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly). The standard book on replication, partitioning and consistency.</li>
+<li><a href="https://sre.google/sre-book/table-of-contents/">Site Reliability Engineering</a>, Google's free book on running reliable systems.</li>
+<li><a href="https://aws.amazon.com/builders-library/">The Amazon Builders' Library</a>: practical articles on timeouts, retries, caching and load shedding.</li>
+<li><a href="https://github.com/donnemartin/system-design-primer">The System Design Primer</a>: a broad, community-maintained overview.</li>
+</ul>
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="notifications.html"><span class="label">Previous</span><b>Notification service</b></a><a class="next" href="monitoring.html"><span class="label">Next</span><b>Monitoring and alerting systems</b></a></nav>
+</main>
+</body>
+</html>

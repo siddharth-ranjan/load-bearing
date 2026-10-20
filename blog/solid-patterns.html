@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>SOLID and the six patterns worth knowing | Load/Bearing</title>
+<meta name="description" content="Principles that keep classes easy to change, and the handful of patterns that come up in almost every low-level design round.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">Low-level design · 18 of 22</span>
+  <h1>SOLID and the six patterns worth knowing</h1>
+  <p class="dek">Principles that keep classes easy to change, and the handful of patterns that come up in almost every low-level design round.</p>
+  <div class="meta"><span>5 min read</span></div>
+</header>
+<article class="wrap">
+
+<p>Low-level design rounds ask you to model a small system in classes and write working code. Interviewers look for code that is easy to extend and test. SOLID names the habits that make that true. Use them as a checklist, not a religion.</p>
+
+<h2>S: single responsibility</h2>
+<p>A class should have <strong>one reason to change</strong>. If a new CSV format, a new tax rule and a new email provider would all edit the same class, split it.</p>
+<pre class="code" data-lang="java"><code>// Before: three reasons to change in one class (format, pricing rules, email provider).
+class InvoiceService {
+    Invoice parse(String csv) { /* ... */ }
+    long totalCents(Invoice invoice) { /* ... */ }
+    void email(Invoice invoice) { /* ... */ }
+}
+
+// After: each class changes for one reason.
+class InvoiceParser { Invoice parse(String csv) { /* ... */ } }
+class InvoicePricer { long totalCents(Invoice invoice) { /* ... */ } }
+class InvoiceMailer { void send(Invoice invoice) { /* ... */ } }</code></pre>
+
+<h2>O: open for extension, closed for modification</h2>
+<p>Add behaviour by adding code, not by editing working code. A <code>switch</code> over types that grows with every feature is the usual warning sign.</p>
+<pre class="code" data-lang="java"><code>interface Discount { long apply(long cents); }
+
+record PercentOff(int percent) implements Discount {
+    public long apply(long cents) { return cents * (100 - percent) / 100; }
+}
+record FlatOff(long off) implements Discount {
+    public long apply(long cents) { return Math.max(0, cents - off); }
+}
+
+// Checkout never changes when marketing invents a new discount type.
+long checkout(long cents, List&lt;Discount&gt; discounts) {
+    for (Discount d : discounts) cents = d.apply(cents);
+    return cents;
+}</code></pre>
+
+<h2>L: Liskov substitution</h2>
+<p>A subtype must work anywhere its parent type is expected, without surprises. If a subclass throws on a method its parent supports, or quietly ignores it, the inheritance is wrong.</p>
+<pre class="code" data-lang="java"><code>// Violates LSP: code written against List expects add() to work.
+class ReadOnlyList&lt;T&gt; extends ArrayList&lt;T&gt; {
+    @Override public boolean add(T t) { throw new UnsupportedOperationException(); }
+}
+
+// Honest types instead: expose only what the object can actually do.
+interface ReadableList&lt;T&gt; { T get(int i); int size(); }</code></pre>
+
+<h2>I: interface segregation</h2>
+<p>Don't make classes implement methods they don't need. Several small interfaces beat one large one.</p>
+<pre class="code" data-lang="java"><code>// A fat interface forces a basic printer to fake scan() and fax().
+interface MultiFunctionDevice { void print(Doc d); void scan(Doc d); void fax(Doc d); }
+
+// Small interfaces, combined only where needed.
+interface Printer { void print(Doc d); }
+interface Scanner { void scan(Doc d); }
+class OfficeCopier implements Printer, Scanner { /* ... */ }
+class HomePrinter implements Printer { /* ... */ }</code></pre>
+
+<h2>D: dependency inversion</h2>
+<p>High-level code depends on interfaces, and the concrete classes are passed in (dependency injection). This is the principle that makes code testable: in tests you pass a fake.</p>
+<pre class="code" data-lang="java"><code>interface PaymentGateway { Receipt charge(String customerId, long cents); }
+
+class OrderService {
+    private final PaymentGateway payments;            // depends on the abstraction
+    OrderService(PaymentGateway payments) { this.payments = payments; }
+
+    Receipt place(Order order) { return payments.charge(order.customerId(), order.totalCents()); }
+}
+
+// Production: new OrderService(new StripeGateway(apiKey))
+// Tests:      new OrderService(new FakeGateway())</code></pre>
+
+<h2>The six patterns worth knowing</h2>
+<p>Most LLD problems need only these. Name the pattern when you use it, and say what it buys you.</p>
+<h3>Strategy</h3><p>Swap an algorithm without changing its caller. <strong>Use it for</strong> pricing rules, routing, retry policies, parking-spot allocation, elevator dispatch.</p><pre class="code" data-lang="java"><code>interface RoutingStrategy { Route route(Point from, Point to); }
+class FastestRoute implements RoutingStrategy { /* ... */ }
+class AvoidTolls  implements RoutingStrategy { /* ... */ }
+
+class Navigator {
+    private RoutingStrategy strategy;
+    void setStrategy(RoutingStrategy s) { this.strategy = s; }   // swap at runtime
+    Route navigate(Point a, Point b) { return strategy.route(a, b); }
+}</code></pre><h3>Factory</h3><p>Put the decision of <em>which</em> class to create in one place. <strong>Use it for</strong> picking an implementation by configuration or input type.</p><pre class="code" data-lang="java"><code>interface Sender { void send(String userId, String message); }
+
+final class Senders {
+    static Sender forChannel(Channel channel) {
+        return switch (channel) {
+            case EMAIL -&gt; new EmailSender();
+            case SMS   -&gt; new SmsSender();
+            case PUSH  -&gt; new PushSender();
+        };
+    }
+}</code></pre><h3>Observer</h3><p>Let many listeners react to an event without the source knowing them. <strong>Use it for</strong> domain events (order placed → reserve stock, send email), UI updates.</p><pre class="code" data-lang="java"><code>interface OrderListener { void onPlaced(Order order); }
+
+class OrderEvents {
+    private final List&lt;OrderListener&gt; listeners = new CopyOnWriteArrayList&lt;&gt;();
+    void subscribe(OrderListener l) { listeners.add(l); }
+    void placed(Order o) { listeners.forEach(l -&gt; l.onPlaced(o)); }
+}
+
+// events.subscribe(inventory::reserve); events.subscribe(mailer::sendConfirmation);</code></pre><h3>Builder</h3><p>Construct an object with many optional fields readably, and validate it once at the end. <strong>Use it for</strong> requests, configs, immutable value objects.</p><pre class="code" data-lang="java"><code>Alert alert = Alert.builder()
+        .service(&quot;payments&quot;)
+        .severity(Severity.CRITICAL)
+        .label(&quot;region&quot;, &quot;ap-south-1&quot;)
+        .dedupeWindow(Duration.ofMinutes(5))
+        .build();                        // build() validates, then returns an immutable Alert</code></pre><h3>Decorator</h3><p>Add behaviour by wrapping an object in another with the same interface. <strong>Use it for</strong> caching, logging, metrics, retries. Java's <code>BufferedInputStream</code> is one.</p><pre class="code" data-lang="java"><code>interface Store { byte[] get(String key); }
+
+class CachingStore implements Store {
+    private final Store inner;
+    private final Map&lt;String, byte[]&gt; cache = new ConcurrentHashMap&lt;&gt;();
+    CachingStore(Store inner) { this.inner = inner; }
+    public byte[] get(String key) { return cache.computeIfAbsent(key, inner::get); }
+}
+
+// Same interface, layered behaviour: new MetricsStore(new CachingStore(new S3Store()))</code></pre><h3>Adapter</h3><p>Make a class with the wrong interface fit the one your code expects. <strong>Use it for</strong> wrapping third-party SDKs so they can be swapped and faked in tests.</p><pre class="code" data-lang="java"><code>// Third-party SDK with its own shape.
+class TwilioClient { MessageResult create(String to, String from, String body) { /* ... */ } }
+
+// Our interface; the rest of the code never sees Twilio.
+class TwilioSmsSender implements SmsSender {
+    private final TwilioClient client;
+    private final String fromNumber;
+    TwilioSmsSender(TwilioClient client, String fromNumber) { this.client = client; this.fromNumber = fromNumber; }
+    public void send(String phone, String text) { client.create(phone, fromNumber, text); }
+}</code></pre>
+
+<h2>Why Singleton is usually a mistake</h2>
+<p>A classic Singleton (<code>Config.getInstance()</code>) is global state in disguise. Callers hide their dependency on it, tests can't replace it, and its state leaks between tests. Lazy initialisation adds threading bugs on top. It's reasonable for something that really is one per process and holds no state that matters to behaviour, such as a logger or immutable configuration loaded once at startup. Even then, it's better to create one instance at startup and inject it, so you get "only one" without the global access.</p>
+
+<h2>Composition over inheritance</h2>
+<p>Inheritance fixes a combination of behaviours at compile time, and the number of subclasses multiplies. Composition builds combinations at runtime from small parts that each do one thing.</p>
+<pre class="code" data-lang="java"><code>// Inheritance: one subclass per combination, and it multiplies with every new channel.
+class EmailNotifier { void notify(User u, String msg) { /* ... */ } }
+class EmailAndSmsNotifier extends EmailNotifier { /* ... */ }
+class EmailSmsAndPushNotifier extends EmailAndSmsNotifier { /* ... */ }
+
+// Composition: a notifier has channels; combinations are just lists.
+interface Channel { void send(User u, String msg); }
+
+class Notifier {
+    private final List&lt;Channel&gt; channels;
+    Notifier(List&lt;Channel&gt; channels) { this.channels = List.copyOf(channels); }
+    void notify(User u, String msg) { channels.forEach(c -&gt; c.send(u, msg)); }
+}
+
+// new Notifier(List.of(new Email(), new Push()))</code></pre>
+<p>Use inheritance for a true "is a" relationship with a stable parent. Use composition when you're combining behaviours.</p>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Have a real example of each SOLID principle from code you've written.</li>
+<li>Have one use case for each of the six patterns.</li>
+<li>Explain why Singleton is usually a mistake, and the exception.</li>
+<li>Show the same design with inheritance and with composition.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Exercise</h2>
+  <p>Take a class you've written that does too much. Split it along SRP lines, inject its dependencies (DIP), and replace one <code>switch</code> on a type with a strategy (OCP). Then write down which of the six patterns your result uses.</p>
+</section>
+<h2>Further reading</h2>
+<ul>
+<li>Eric Freeman and Elisabeth Robson, <em>Head First Design Patterns</em> (O'Reilly). The friendliest introduction to the classic patterns.</li>
+<li><a href="https://refactoring.guru/design-patterns">Refactoring.Guru: design patterns</a>, with diagrams and Java examples for each pattern.</li>
+<li>Joshua Bloch, <em>Effective Java</em>. Idiomatic Java, including builders, immutability and concurrency.</li>
+</ul>
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="design-interview.html"><span class="label">Previous</span><b>Running a design interview</b></a><a class="next" href="lru-rate-limiter.html"><span class="label">Next</span><b>Coding an LRU cache and a rate limiter</b></a></nav>
+</main>
+</body>
+</html>

@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Splitwise: expenses, splits and settling up | Load/Bearing</title>
+<meta name="description" content="Model shared expenses so equal, exact and percentage splits share one code path, then settle the group in as few payments as practical.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">Low-level design · 21 of 22</span>
+  <h1>Splitwise: expenses, splits and settling up</h1>
+  <p class="dek">Model shared expenses so equal, exact and percentage splits share one code path, then settle the group in as few payments as practical.</p>
+  <div class="meta"><span>4 min read</span></div>
+</header>
+<article class="wrap">
+
+<p>Splitwise tracks who paid for what in a group and who owes whom. It's a good LLD problem because it has a real model, a real algorithm, and one classic trap: rounding money.</p>
+
+<h2>The model</h2>
+<ul>
+<li><strong>User</strong> and <strong>Group</strong> (a set of users).</li>
+<li><strong>Expense:</strong> who paid, the total, and how much each participant owes. The owed amounts must add up exactly to the total.</li>
+<li><strong>Balance:</strong> for each person, the net amount: what they paid minus what they owe, across all expenses. Positive means others owe them.</li>
+<li><strong>Transfer:</strong> a suggested payment from one person to another that settles debts.</li>
+</ul>
+<p>Store money as <code>long</code> cents (or paise). A ₹100 bill split three ways is 3,334 + 3,333 + 3,333 paise, and someone has to get the extra paisa.</p>
+
+<h2>Three split types, one code path</h2>
+<p>The trick: <strong>every split is a weighted split</strong>. Equal is weight 1 each. Percentage is weights in basis points that must add up to 10,000. Exact amounts are weights equal to the amounts, which must add up to the total. So there's one function for the arithmetic, and each split type only validates its input and builds weights.</p>
+<pre class="code" data-lang="java"><code>final class Splits {
+    /** Splits totalCents in proportion to weights. Leftover cents go to the largest remainders,
+     *  so the parts always add up exactly to the total. */
+    static Map&lt;String, Long&gt; byWeight(long totalCents, Map&lt;String, Long&gt; weights) {
+        long sum = weights.values().stream().mapToLong(Long::longValue).sum();
+        if (sum &lt;= 0) throw new IllegalArgumentException(&quot;weights must add up to more than zero&quot;);
+        Map&lt;String, Long&gt; parts = new LinkedHashMap&lt;&gt;();
+        List&lt;Map.Entry&lt;String, Long&gt;&gt; remainders = new ArrayList&lt;&gt;();
+        long assigned = 0;
+        for (Map.Entry&lt;String, Long&gt; w : weights.entrySet()) {
+            long scaled = totalCents * w.getValue();
+            parts.put(w.getKey(), scaled / sum);
+            assigned += scaled / sum;
+            remainders.add(Map.entry(w.getKey(), scaled % sum));
+        }
+        remainders.sort(Map.Entry.&lt;String, Long&gt;comparingByValue().reversed());
+        for (int i = 0; i &lt; totalCents - assigned; i++) {
+            parts.merge(remainders.get(i).getKey(), 1L, Long::sum);
+        }
+        return parts;
+    }
+
+    // Each split type is only validation plus weights. There is one code path for the arithmetic.
+    static Map&lt;String, Long&gt; equal(long totalCents, List&lt;String&gt; people) {
+        Map&lt;String, Long&gt; weights = new LinkedHashMap&lt;&gt;();
+        people.forEach(p -&gt; weights.put(p, 1L));
+        return byWeight(totalCents, weights);
+    }
+
+    static Map&lt;String, Long&gt; percent(long totalCents, Map&lt;String, Long&gt; basisPoints) {
+        require(sum(basisPoints) == 10_000, &quot;percentages must add up to 100%&quot;);
+        return byWeight(totalCents, basisPoints);
+    }
+
+    static Map&lt;String, Long&gt; exact(long totalCents, Map&lt;String, Long&gt; cents) {
+        require(sum(cents) == totalCents, &quot;amounts must add up to the total&quot;);
+        return byWeight(totalCents, cents);          // weights equal to the amounts reproduce them exactly
+    }
+
+    private static long sum(Map&lt;String, Long&gt; m) { return m.values().stream().mapToLong(Long::longValue).sum(); }
+    private static void require(boolean ok, String message) { if (!ok) throw new IllegalArgumentException(message); }
+}</code></pre>
+<p>Leftover cents go to the people with the largest remainders (the "largest remainder method"), so every split adds up to the exact total and the extra cent lands where the rounding error was biggest. New types, such as "by shares" (2 shares for an adult, 1 for a child), are just more weights.</p>
+
+<h2>Balances and settling up</h2>
+<p>Don't track who owes whom pair by pair. Each expense just adjusts every participant's <strong>net balance</strong>. To settle up, match people who owe with people who are owed:</p>
+<pre class="code" data-lang="java"><code>record Expense(String id, String paidBy, long totalCents, Map&lt;String, Long&gt; owed) {}
+record Transfer(String from, String to, long cents) {}
+
+final class Group {
+    private final Map&lt;String, Long&gt; net = new HashMap&lt;&gt;();   // positive: is owed; negative: owes
+
+    void add(Expense e) {
+        net.merge(e.paidBy(), e.totalCents(), Long::sum);
+        e.owed().forEach((person, cents) -&gt; net.merge(person, -cents, Long::sum));
+    }
+
+    Map&lt;String, Long&gt; balances() { return Map.copyOf(net); }
+
+    /** Greedy settlement: largest debtor pays largest creditor. At most n - 1 transfers, O(n log n). */
+    List&lt;Transfer&gt; settle() {
+        Comparator&lt;Map.Entry&lt;String, Long&gt;&gt; bySize = Comparator.comparingLong(e -&gt; Math.abs(e.getValue()));
+        PriorityQueue&lt;Map.Entry&lt;String, Long&gt;&gt; creditors = new PriorityQueue&lt;&gt;(bySize.reversed());
+        PriorityQueue&lt;Map.Entry&lt;String, Long&gt;&gt; debtors = new PriorityQueue&lt;&gt;(bySize.reversed());
+        net.forEach((person, cents) -&gt; {
+            if (cents &gt; 0) creditors.add(Map.entry(person, cents));
+            else if (cents &lt; 0) debtors.add(Map.entry(person, cents));
+        });
+
+        List&lt;Transfer&gt; transfers = new ArrayList&lt;&gt;();
+        while (!creditors.isEmpty()) {
+            Map.Entry&lt;String, Long&gt; c = creditors.poll(), d = debtors.poll();
+            long pay = Math.min(c.getValue(), -d.getValue());
+            transfers.add(new Transfer(d.getKey(), c.getKey(), pay));
+            if (c.getValue() &gt; pay) creditors.add(Map.entry(c.getKey(), c.getValue() - pay));
+            if (-d.getValue() &gt; pay) debtors.add(Map.entry(d.getKey(), d.getValue() + pay));
+        }
+        return transfers;
+    }
+}</code></pre>
+<p>The greedy algorithm always pays the largest debt to the largest credit. Each transfer settles at least one person completely, so a group of n people needs <strong>at most n − 1 transfers</strong>, and with two heaps it runs in <strong>O(n log n)</strong>.</p>
+<div class="note"><p><strong>Is it optimal?</strong> Not always. Finding the true minimum number of transfers is NP-hard: it's equivalent to splitting the balances into as many groups that sum to zero as possible. For small groups you can solve it exactly with a search over subsets in O(2ⁿ) (LeetCode 465, "Optimal Account Balancing"). In an interview, say that greedy is the practical answer, give its bound, and mention the exact version.</p></div>
+
+<h2>Things to mention</h2>
+<ul>
+<li><strong>Who can edit:</strong> editing or deleting an expense reverses its old balance changes, then applies the new ones. Keep expenses append-only with a history, so balances can always be recomputed.</li>
+<li><strong>Currencies:</strong> balances per currency, or convert at the expense date's rate and store that rate.</li>
+<li><strong>Concurrency:</strong> two people adding expenses at once. Updating balances inside a transaction (or recomputing from expenses) keeps them consistent.</li>
+</ul>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Model users, groups, expenses, owed amounts and net balances.</li>
+<li>Use integer money, and say how leftover cents are distributed.</li>
+<li>One weighted-split code path, with validation per split type.</li>
+<li>Greedy settlement with two heaps: at most n − 1 transfers, O(n log n).</li>
+<li>Know that the true minimum is NP-hard, and the subset-search alternative.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Exercise</h2>
+  <p>Implement <code>Splits</code> and <code>Group</code>, then test: ₹100 split three ways sums to exactly ₹100; percentages that don't add to 100% are rejected; and after <code>settle()</code>, applying the transfers leaves every balance at zero.</p>
+</section>
+<h2>Further reading</h2>
+<ul>
+<li>Eric Freeman and Elisabeth Robson, <em>Head First Design Patterns</em> (O'Reilly). The friendliest introduction to the classic patterns.</li>
+<li><a href="https://refactoring.guru/design-patterns">Refactoring.Guru: design patterns</a>, with diagrams and Java examples for each pattern.</li>
+<li>Joshua Bloch, <em>Effective Java</em>. Idiomatic Java, including builders, immutability and concurrency.</li>
+</ul>
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="parking-lot.html"><span class="label">Previous</span><b>Parking lot in 90 minutes</b></a><a class="next" href="elevator.html"><span class="label">Next</span><b>Elevator system: state machine and scheduling</b></a></nav>
+</main>
+</body>
+</html>

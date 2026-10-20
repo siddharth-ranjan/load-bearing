@@ -12,3 +12,4 @@ mkdir -p _site
   echo '</body></html>'
 } > _site/index.html
 rm -rf _site/blog && cp -r blog _site/blog
+cp workshop.html _site/workshop.html

@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Load/Bearing Workshop</title>
+<meta name="description" content="Drills for the parts of system design a traffic simulator can't show: LRU eviction, token buckets, elevator scheduling, settling debts, race conditions, and quick-fire rounds.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog/blog.css">
+<style>
+/* Workshop: the blog's tokens and top bar; a card grid of drills, and one drill open at a time. */
+body{font-size:16px}
+.ws{max-width:1040px}
+.intro{padding-block:36px 8px}
+.grp{margin-top:26px}
+.grp h2{font-family:var(--f-display);font-size:24px;margin:0 0 10px;letter-spacing:-.01em}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
+.dcard{display:flex;flex-direction:column;gap:4px;text-align:left;padding:14px;border:1px solid var(--line);border-radius:6px;background:var(--panel);cursor:pointer;font:inherit;color:inherit}
+.dcard:hover{border-color:var(--ink)}
+.dcard[aria-current="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.dcard b{font-family:var(--f-display);font-size:17px;line-height:1.2}
+.dcard span{font-size:13px;color:var(--muted);line-height:1.4}
+.dcard .best{font-family:var(--f-mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-top:auto;padding-top:6px}
+.dcard .best.done{color:var(--ok)}
+.dcard:focus-visible,.btn:focus-visible,.opt:focus-visible,.chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+#stage{margin:28px 0 64px;border:1px solid var(--line);border-radius:6px;background:var(--panel);padding:20px;scroll-margin-top:72px}
+#stage h2{font-family:var(--f-display);font-size:28px;margin:0;line-height:1.1;letter-spacing:-.01em;text-wrap:balance}
+#stage .how{color:var(--muted);margin:6px 0 16px;max-width:68ch}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.btn{font:inherit;font-weight:700;font-size:14px;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:5px;padding:8px 14px;cursor:pointer}
+.btn:hover:not(:disabled){border-color:var(--ink)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.opt{font:inherit;font-size:15px;text-align:left;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:5px;padding:10px 12px;cursor:pointer;width:100%}
+.opt:hover:not(:disabled){border-color:var(--ink)}
+.opt.right{border-color:var(--ok);box-shadow:inset 3px 0 0 var(--ok)}
+.opt.wrong{border-color:var(--bad);box-shadow:inset 3px 0 0 var(--bad)}
+.opt:disabled{cursor:default}
+.opts{display:grid;gap:6px;margin:10px 0}
+.q{font-size:17px;margin:4px 0 0;max-width:68ch}
+.q code,.why code,.mono{font-family:var(--f-mono);font-size:.9em}
+.why{margin:8px 0 0;padding:10px 12px;border-left:3px solid var(--accent);background:var(--bg);border-radius:0 4px 4px 0;max-width:68ch}
+.meter{font-family:var(--f-mono);font-size:12px;color:var(--muted);letter-spacing:.04em}
+.score{font-family:var(--f-display);font-size:22px;font-weight:800}
+.score.ok{color:var(--ok)} .score.bad{color:var(--bad)}
+.cache{display:flex;gap:6px;flex-wrap:wrap}
+.slot{font-family:var(--f-mono);font-weight:600;min-width:42px;height:42px;display:grid;place-items:center;border:1.5px solid var(--ink);border-radius:5px;background:var(--bg)}
+.slot.empty{border-style:dashed;color:var(--muted);border-color:var(--line)}
+.hist{font-family:var(--f-mono);font-size:13px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 10px;margin:10px 0}
+.hist .now{color:var(--ink);font-weight:600}
+.panel{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}
+@media (max-width:720px){ .panel{grid-template-columns:minmax(0,1fr)} }
+.timeline{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.chip{font:inherit;font-family:var(--f-mono);font-size:13px;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:4px;padding:6px 9px;cursor:pointer}
+.chip.ok{border-color:var(--ok);color:var(--ok)} .chip.bad{border-color:var(--bad);color:var(--bad)}
+.chip.cur{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.chip:disabled{cursor:default}
+.shaft{display:grid;grid-template-columns:repeat(13,minmax(0,1fr));gap:4px;margin:12px 0}
+.floor{font-family:var(--f-mono);font-size:13px;height:40px;display:grid;place-items:center;border:1px solid var(--line);border-radius:4px;background:var(--bg);color:var(--muted);cursor:default;font-weight:600}
+.floor.stop{border-color:var(--ink);color:var(--ink);cursor:pointer}
+.floor.car{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.floor.done{border-color:var(--ok);color:var(--ok)}
+.floor.oops{border-color:var(--bad);color:var(--bad)}
+.people{display:grid;gap:6px}
+.person{display:grid;grid-template-columns:90px minmax(0,1fr) 110px;gap:10px;align-items:center;border:1px solid var(--line);border-radius:5px;padding:8px 10px;background:var(--bg);cursor:pointer;font:inherit;color:inherit;text-align:left}
+.person[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.person .bal{font-family:var(--f-mono);text-align:right;font-variant-numeric:tabular-nums}
+.person .bal.neg{color:var(--bad)} .person .bal.pos{color:var(--ok)}
+.bar2{height:8px;background:var(--sunk);border-radius:4px;position:relative;overflow:hidden}
+.bar2 i{position:absolute;top:0;bottom:0;border-radius:4px}
+.ledger{font-family:var(--f-mono);font-size:13px;display:grid;gap:3px;margin-top:8px}
+.lot{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:12px 0}
+.spot{border:1.5px dashed var(--line);border-radius:5px;min-height:72px;padding:6px;font-family:var(--f-mono);font-size:12px;display:flex;flex-direction:column;gap:3px}
+.spot b{font-size:11px;color:var(--muted)}
+.spot.taken{border-style:solid;border-color:var(--ink)}
+.spot.double{border-style:solid;border-color:var(--bad);background:color-mix(in srgb, var(--bad) 8%, var(--bg))}
+.seg2{display:inline-flex;border:1px solid var(--line);border-radius:5px;overflow:hidden}
+.seg2 button{font:inherit;font-family:var(--f-mono);font-size:12px;border:0;background:var(--bg);color:var(--ink);padding:8px 10px;cursor:pointer}
+.seg2 button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.foot{margin-top:18px;font-size:14px;color:var(--muted)}
+@media (prefers-reduced-motion: reduce){ *{transition:none!important} }
+</style>
+</head>
+<body>
+<div class="bar"><div class="wrap ws">
+  <a class="brand" href="./">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="./">Play</a><a href="workshop.html" aria-current="page">Workshop</a><a href="blog/index.html">Field notes</a></nav>
+</div></div>
+
+<main class="wrap ws">
+  <section class="intro">
+    <span class="label">Workshop</span>
+    <h1 style="font-family:var(--f-display);font-weight:800;font-size:clamp(34px,5.5vw,52px);line-height:1;letter-spacing:-.03em;margin:4px 0 10px">What the simulator can't show</h1>
+    <p style="font-size:18px;color:var(--muted);max-width:62ch;margin:0">Low-level design, data structures and correctness questions don't show up as traffic. These drills make you do them by hand: predict the eviction, schedule the elevator, settle the debts, catch the race.</p>
+  </section>
+  <div id="groups"></div>
+  <section id="stage" aria-live="polite" hidden></section>
+</main>
+
+<script>
+// Paths resolve from the site root whether this page is served at / or /load-bearing.
+const store = {
+  get(){ try { return JSON.parse(localStorage.getItem('loadbearing:workshop') || '{}'); } catch { return {}; } },
+  set(v){ try { localStorage.setItem('loadbearing:workshop', JSON.stringify(v)); } catch {} },
+};
+const best = store.get();
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+const rnd = n => Math.floor(Math.random() * n);
+const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--){ const j = rnd(i + 1); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const PASS = 0.8;
+
+/* ---------- quick-fire rounds: [question, options, correct index, why] ---------- */
+const MCQ = {
+solid: [
+  ['A <code>ReportService</code> queries the database, renders a PDF and emails it.', ['Single responsibility','Open/closed','Liskov substitution','Dependency inversion'], 0, 'Three reasons to change (data, format, delivery) in one class.'],
+  ['Adding a payment method means editing a <code>switch</code> inside <code>PaymentProcessor</code>.', ['Single responsibility','Open/closed','Interface segregation','Dependency inversion'], 1, 'New behaviour should be a new class (a strategy), not an edit to working code.'],
+  ['<code>Penguin extends Bird</code>, and <code>Penguin.fly()</code> throws <code>UnsupportedOperationException</code>.', ['Open/closed','Liskov substitution','Interface segregation','Single responsibility'], 1, 'Code written for any <code>Bird</code> breaks when handed a penguin.'],
+  ['Every repository implements a 12-method interface, so read-only ones throw on <code>save()</code>.', ['Interface segregation','Open/closed','Dependency inversion','Single responsibility'], 0, 'Split into small interfaces such as <code>Reader</code> and <code>Writer</code> and implement only what you support.'],
+  ['<code>OrderService</code> calls <code>new MySqlConnection()</code> in its constructor.', ['Liskov substitution','Single responsibility','Dependency inversion','Open/closed'], 2, 'Depend on an interface and have the connection passed in, so tests can pass a fake.'],
+  ['A <code>Square</code> subclass of <code>Rectangle</code> changes its height whenever you set its width.', ['Liskov substitution','Interface segregation','Single responsibility','Dependency inversion'], 0, 'Callers that set width then height on a <code>Rectangle</code> get surprising areas.'],
+  ['Tax rules for 30 countries are <code>if/else</code> branches in one <code>calculate()</code> method.', ['Dependency inversion','Open/closed','Liskov substitution','Interface segregation'], 1, 'One <code>TaxRule</code> class per country, chosen by a factory, keeps <code>calculate()</code> closed.'],
+  ['Unit tests need a live SMTP server because <code>Notifier</code> builds its own <code>SmtpClient</code>.', ['Single responsibility','Interface segregation','Dependency inversion','Open/closed'], 2, 'Inject a <code>MailSender</code> interface; pass a fake in tests.'],
+],
+patterns: [
+  ['Pick standard, express or same-day shipping cost at runtime.', ['Strategy','Observer','Builder','Adapter'], 0, 'Interchangeable algorithms behind one interface.'],
+  ['Create a JSON, XML or CSV parser depending on the file extension.', ['Decorator','Factory','Observer','Strategy'], 1, 'One place decides which class to create.'],
+  ['When an order is placed, inventory, email and analytics each react.', ['Adapter','Builder','Observer','Factory'], 2, 'The order publishes an event; listeners subscribe without the order knowing them.'],
+  ['Build an HTTP request with many optional headers and timeouts, validated once at the end.', ['Builder','Strategy','Decorator','Adapter'], 0, 'Readable step-by-step construction, then one validated, immutable object.'],
+  ['Add caching and metrics to an existing repository without changing its code.', ['Observer','Decorator','Factory','Builder'], 1, 'Wrap it in classes with the same interface, layer by layer.'],
+  ['Use a vendor payment SDK behind your own <code>PaymentGateway</code> interface.', ['Strategy','Builder','Adapter','Observer'], 2, 'Translate the vendor\'s shape into yours, so it can be swapped or faked.'],
+  ['Change the elevator dispatch policy for the morning rush.', ['Strategy','Decorator','Adapter','Factory'], 0, 'Same interface, different algorithm, chosen at runtime.'],
+  ['Wrap an <code>InputStream</code> so reads are buffered.', ['Adapter','Decorator','Builder','Observer'], 1, '<code>BufferedInputStream</code> adds behaviour and keeps the same interface.'],
+],
+index: [
+  ['Index on <code>orders(user_id, created_at)</code>. Does <code>WHERE user_id = 7</code> use it?', ['Yes','No'], 0, 'It filters on the leftmost column.'],
+  ['Same index. Does <code>WHERE created_at &gt; \'2026-10-01\'</code> use it to seek?', ['Yes','No'], 1, 'It skips the leftmost column, so the sorted order doesn\'t help (leftmost-prefix rule).'],
+  ['Same index. <code>WHERE user_id = 7 ORDER BY created_at DESC LIMIT 20</code>: does the database need to sort?', ['Yes, a sort step','No, rows come out in index order'], 1, 'Within one user_id the index is already sorted by created_at.'],
+  ['Best index for <code>WHERE status = \'paid\' AND created_at &gt; X</code>?', ['(created_at, status)','(status, created_at)','Two single-column indexes'], 1, 'Equality columns first, then the range column.'],
+  ['95% of rows have <code>status = \'active\'</code>. Will an index on <code>status</code> speed up <code>WHERE status = \'active\'</code>?', ['Yes, a lot','No, the planner will likely scan the table'], 1, 'Low selectivity: reading most of the table through random index lookups is slower than a sequential scan.'],
+  ['Index on <code>email</code>. Query: <code>WHERE lower(email) = \'a@b.com\'</code>.', ['Uses the index','Doesn\'t use it; index lower(email) instead'], 1, 'A function on the column hides it from a plain index. Create an expression index.'],
+  ['<code>SELECT created_at, total FROM orders WHERE user_id = 7</code> should never touch the table. Which index?', ['(user_id)','(user_id, created_at) INCLUDE (total)','(total)'], 1, 'A covering index holds every column the query needs, so it\'s an index-only scan.'],
+  ['A write-heavy table has 9 indexes, and 5 of them are never read. What do they cost?', ['Nothing, unused indexes are free','Every insert updates all 9'], 1, 'Each index is another B-tree to update on every write, plus memory in the buffer pool.'],
+],
+writepol: [
+  ['Which pattern can lose writes that were already acknowledged, if the cache node dies?', ['Cache-aside','Write-through','Write-behind (write-back)','Write-around'], 2, 'Writes sit in the cache until a later flush to the database.'],
+  ['Cache-aside: after updating the database row, what do you do with the cache key?', ['Update it with the new value','Delete it','Leave it until the TTL'], 1, 'Deleting avoids a race where two writers leave the older value cached; the next read reloads it.'],
+  ['A profile is read immediately after every edit. Which write pattern fits?', ['Write-through','Write-around','Write-behind'], 0, 'The cache is updated with the write, so the next read hits.'],
+  ['Audit logs: written once, almost never read.', ['Write-through','Write-around','Write-behind'], 1, 'Don\'t fill the cache with data nobody will read.'],
+  ['An alert dedupe cache only needs a key for the 5-minute dedupe window. Which eviction fits best?', ['LRU','LFU','TTL of 5 minutes'], 2, 'The key\'s lifetime is defined by time, not by popularity.'],
+  ['A few items are popular all day, and a nightly batch reads millions of rows once. Which policy protects the popular items?', ['LRU','LFU','FIFO'], 1, 'LRU would let the one-off scan flush them out; LFU keeps frequently used keys.'],
+  ['Which is NOT one of the standard cache stampede fixes?', ['Request coalescing','TTL jitter','Serve stale while revalidating','Shorter TTLs'], 3, 'Shorter TTLs cause more expiries, not fewer herds.'],
+  ['How do you usually find a hot key?', ['Total cache hit rate','Skew on one cache node, plus sampled top-K key counts','Database CPU'], 1, 'Averages hide it; one node maxing out while the others idle gives it away.'],
+],
+ids: [
+  ['About how many keys do 7 base62 characters give?', ['3.5 million','3.5 billion','3.5 trillion'], 2, '62⁷ ≈ 3.5 × 10¹².'],
+  ['100M new short links a month is roughly how many writes per second?', ['4','40','4,000'], 1, '100M ÷ 2.6M seconds ≈ 40/s.'],
+  ['What\'s wrong with handing out short keys from one sequential counter?', ['Collisions','Guessable keys and a single bottleneck','Keys are too long'], 1, 'Lease counter ranges per server and scramble them, or use a pre-generated pool.'],
+  ['You want to count every click on a short link. 301 or 302?', ['301','302'], 1, 'Browsers cache 301s, so repeat clicks never reach you.'],
+  ['Snowflake ID layout?', ['32-bit time + 32-bit random','41-bit ms timestamp + 10-bit machine + 12-bit sequence','128 random bits'], 1, '4,096 IDs per millisecond per machine, roughly time-ordered.'],
+  ['Why do random UUIDv4 primary keys slow down inserts?', ['They are 128 bits','Random positions scatter writes across the B-tree','UUIDs can collide'], 1, 'Time-ordered IDs (UUIDv7, ULID) append near the end of the index instead.'],
+],
+chat: [
+  ['Where does a user\'s WebSocket connection state live?', ['In the database','On one gateway, with user → gateway in a registry (Redis, TTL)','On every app server'], 1, 'Gateways are stateful; everything behind them stays stateless and looks up the gateway.'],
+  ['How do you order messages within a conversation?', ['Client timestamps','Server-assigned sequence numbers from a single writer per conversation','Arrival time at the gateway'], 1, 'Partition by conversation_id so one writer assigns increasing sequence numbers.'],
+  ['A client resends a message after its connection dropped. How do you avoid posting it twice?', ['Ignore it','client_msg_id on every send, deduplicated by the server','Lower the timeout'], 1, 'An idempotency key for messages.'],
+  ['Data model for read receipts?', ['A row per message per reader','Per member: last_delivered_seq and last_read_seq','A boolean on each message'], 1, 'Watermarks: one small update marks everything up to that sequence as read.'],
+  ['Where do messages for an offline user wait?', ['In a separate offline queue only','They are already stored; on reconnect the client syncs from its last seq, plus a push notification','On the sender\'s phone'], 1, 'Persist first, then deliver. Offline just means not delivered yet.'],
+  ['A channel with 100,000 members. Push every message to every member\'s gateway?', ['Yes','No, members pull messages for channels they\'re viewing'], 1, 'The same trade-off as a celebrity in a news feed.'],
+],
+kafka: [
+  ['A consumer commits its offset, then crashes before processing. What did you get?', ['At-most-once','At-least-once','Exactly-once'], 0, 'The message is skipped.'],
+  ['A consumer processes, then crashes before committing. What happens?', ['Message lost','Message processed again','Kafka rolls it back'], 1, 'At-least-once, the usual default. Handlers must be idempotent.'],
+  ['Kafka\'s exactly-once covers…', ['Any side effect, including charging a card','Read from Kafka → process → write to Kafka, with transactions','Nothing'], 1, 'External side effects still need idempotency keys.'],
+  ['A topic has 12 partitions; one consumer group has 15 consumers. How many are idle?', ['0','3','12'], 1, 'Each partition goes to exactly one consumer in a group.'],
+  ['What order does Kafka guarantee?', ['Across the whole topic','Within a partition (same key)','None'], 1, 'Choose the key so related events share a partition.'],
+  ['A malformed message fails every time. What should happen after a few attempts?', ['Retry forever','Move it to a dead-letter queue and alert','Delete it silently'], 1, 'Otherwise it blocks its partition or eats worker time forever.'],
+],
+};
+
+/* ---------- registry ---------- */
+const DRILLS = [
+  { id:'lru', group:'Low-level design', title:'LRU eviction', blurb:'Track recency in your head: hit or miss, and who gets evicted.', topic:['lru-rate-limiter','Coding an LRU cache'], run:lruDrill },
+  { id:'bucket', group:'Low-level design', title:'Token bucket', blurb:'Allow or deny each request as tokens drain and refill.', topic:['lru-rate-limiter','Coding a rate limiter'], run:bucketDrill },
+  { id:'race', group:'Low-level design', title:'Last spot race', blurb:'Open the gates and watch two cars get the same parking spot.', topic:['parking-lot','Parking lot'], run:raceDrill },
+  { id:'settle', group:'Low-level design', title:'Settle up', blurb:'Clear a group\'s debts in as few payments as possible.', topic:['splitwise','Splitwise'], run:settleDrill },
+  { id:'look', group:'Low-level design', title:'Elevator: LOOK order', blurb:'Serve every stop in the order the LOOK algorithm would.', topic:['elevator','Elevator system'], run:lookDrill },
+  { id:'states', group:'Low-level design', title:'Elevator: legal moves', blurb:'Which state transitions should the controller refuse?', topic:['elevator','Elevator system'], run:statesDrill },
+  { id:'solid', group:'Low-level design', title:'Spot the principle', blurb:'Which SOLID principle does each design break?', topic:['solid-patterns','SOLID and patterns'], mcq:true },
+  { id:'patterns', group:'Low-level design', title:'Name the pattern', blurb:'Strategy, Factory, Observer, Builder, Decorator or Adapter?', topic:['solid-patterns','SOLID and patterns'], mcq:true },
+  { id:'writepol', group:'Fundamentals', title:'Cache write policies', blurb:'Write-through, write-back, eviction and stampedes.', topic:['caching','Caching'], mcq:true },
+  { id:'index', group:'Fundamentals', title:'Index advisor', blurb:'Leftmost prefix, covering indexes, and when an index hurts.', topic:['indexing','Database indexing'], mcq:true },
+  { id:'kafka', group:'Fundamentals', title:'Delivery guarantees', blurb:'Offsets, exactly-once, partitions and dead letters.', topic:['queues','Message queues'], mcq:true },
+  { id:'ids', group:'High-level design', title:'Short keys and IDs', blurb:'Key space, counters, Snowflake IDs, 301 vs 302.', topic:['url-shortener','URL shortener'], mcq:true },
+  { id:'chat', group:'High-level design', title:'Chat correctness', blurb:'Connection state, ordering, receipts and offline users.', topic:['chat','Chat systems'], mcq:true },
+];
+
+function renderGroups(){
+  const groups = [...new Set(DRILLS.map(d => d.group))];
+  $('#groups').innerHTML = groups.map(g => `<section class="grp"><h2>${g}</h2><div class="grid">${DRILLS.filter(d => d.group === g).map(d => {
+    const b = best[d.id];
+    return `<button class="dcard" data-id="${d.id}" aria-current="${location.hash === '#' + d.id}"><b>${d.title}</b><span>${d.blurb}</span>
+      <span class="best ${b >= PASS ? 'done' : ''}">${b == null ? 'Not tried' : 'Best ' + Math.round(b * 100) + '%' + (b >= PASS ? ' · passed' : '')}</span></button>`;
+  }).join('')}</div></section>`).join('');
+  document.querySelectorAll('.dcard').forEach(c => c.onclick = () => { history.replaceState(null, '', '#' + c.dataset.id); open(c.dataset.id, true); });
+}
+
+function open(id, scroll){
+  const d = DRILLS.find(x => x.id === id); if (!d) return;
+  document.querySelectorAll('.dcard').forEach(c => c.setAttribute('aria-current', c.dataset.id === id));
+  const st = $('#stage'); st.hidden = false;
+  st.innerHTML = `<span class="label">${d.group}</span><h2>${d.title}</h2><div id="drill"></div>
+    <p class="foot">Background: <a href="blog/${d.topic[0]}.html">${d.topic[1]}</a></p>`;
+  (d.mcq ? mcqDrill : d.run)($('#drill'), score => record(id, score), d);
+  if (scroll) st.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block:'start' });
+}
+function record(id, score){ best[id] = Math.max(best[id] || 0, score); store.set(best); renderGroups(); }
+function finish(el, got, total, onScore, again){
+  const s = total ? got / total : 0; onScore(s);
+  const box = document.createElement('div');
+  box.className = 'row'; box.style.marginTop = '14px';
+  box.innerHTML = `<span class="score ${s >= PASS ? 'ok' : 'bad'}">${got} / ${total}</span><span class="meter">${s >= PASS ? 'Passed' : 'Pass mark is ' + Math.round(PASS * 100) + '%'}</span>`;
+  const b = document.createElement('button'); b.className = 'btn primary'; b.textContent = 'Try a new round'; b.onclick = again;
+  box.append(b); el.append(box); b.focus({ preventScroll:true });
+}
+
+/* ---------- multiple choice ---------- */
+function mcqDrill(el, onScore, d){
+  const qs = shuffle(MCQ[d.id]); let i = 0, got = 0;
+  el.innerHTML = `<p class="how">${qs.length} questions. Each one explains itself after you answer.</p><div id="q"></div>`;
+  const q = $('#q');
+  const show = () => {
+    if (i >= qs.length){ q.innerHTML = ''; return finish(q, got, qs.length, onScore, () => mcqDrill(el, onScore, d)); }
+    const [text, opts, right, why] = qs[i];
+    q.innerHTML = `<span class="meter">Question ${i + 1} of ${qs.length} · ${got} right</span><p class="q">${text}</p>
+      <div class="opts">${opts.map((o, k) => `<button class="opt" data-k="${k}">${o}</button>`).join('')}</div><div id="after"></div>`;
+    q.querySelectorAll('.opt').forEach(b => b.onclick = () => {
+      const k = +b.dataset.k, ok = k === right; if (ok) got++;
+      q.querySelectorAll('.opt').forEach(x => { x.disabled = true; if (+x.dataset.k === right) x.classList.add('right'); });
+      if (!ok) b.classList.add('wrong');
+      $('#after').innerHTML = `<p class="why"><b>${ok ? 'Right.' : 'Not quite.'}</b> ${why}</p><div class="row" style="margin-top:10px"><button class="btn primary" id="next">${i + 1 < qs.length ? 'Next question' : 'See score'}</button></div>`;
+      $('#next').onclick = () => { i++; show(); }; $('#next').focus({ preventScroll:true });
+    });
+  };
+  show();
+}
+
+/* ---------- LRU ---------- */
+function lruDrill(el, onScore){
+  const CAPACITY = 3, KEYS = ['A','B','C','D','E'];
+  let ops, evictions;
+  do {   // generate until the round has enough evictions to be interesting
+    ops = []; evictions = 0; const sim = [];
+    for (let n = 0; n < 14; n++){
+      const k = KEYS[rnd(KEYS.length)];
+      const kind = sim.length && Math.random() < 0.4 ? 'get' : 'put';
+      let answer;
+      const at = sim.indexOf(k);
+      if (kind === 'get'){ answer = at >= 0 ? 'Hit' : 'Miss'; if (at >= 0){ sim.splice(at, 1); sim.unshift(k); } }
+      else if (at >= 0){ answer = 'Nothing'; sim.splice(at, 1); sim.unshift(k); }
+      else { if (sim.length === CAPACITY){ answer = sim.pop(); evictions++; } else answer = 'Nothing'; sim.unshift(k); }
+      ops.push({ kind, k, answer });
+    }
+  } while (evictions < 4);
+  let i = 0, got = 0; const cache = [];
+  el.innerHTML = `<p class="how">Capacity ${CAPACITY}. The cache is shown in alphabetical order, so you have to track recency yourself. A <code>get</code> that hits counts as a use.</p>
+    <div class="panel"><div><span class="label">Cache</span><div class="cache" id="slots" style="margin-top:6px"></div><div class="hist" id="hist"></div></div><div id="ask"></div></div>`;
+  const draw = () => {
+    $('#slots').innerHTML = [...cache].sort().map(k => `<span class="slot">${k}</span>`).join('') + '<span class="slot empty">·</span>'.repeat(CAPACITY - cache.length);
+    $('#hist').innerHTML = ops.slice(0, i + 1).map((o, n) => `<span class="${n === i ? 'now' : ''}">${o.kind}(${o.k})</span>`).join('');
+  };
+  const step = () => {
+    if (i >= ops.length){ $('#ask').innerHTML = ''; return finish($('#ask'), got, ops.length, onScore, () => lruDrill(el, onScore)); }
+    draw();
+    const o = ops[i];
+    const choices = o.kind === 'get' ? ['Hit', 'Miss'] : ['Nothing', ...[...cache].sort()];
+    $('#ask').innerHTML = `<span class="meter">Step ${i + 1} of ${ops.length} · ${got} right</span>
+      <p class="q"><code>${o.kind}(${o.k})</code>: ${o.kind === 'get' ? 'hit or miss?' : 'which key is evicted?'}</p>
+      <div class="opts">${choices.map(c => `<button class="opt" data-c="${c}">${c === 'Nothing' ? 'Nothing is evicted' : c}</button>`).join('')}</div><div id="after"></div>`;
+    $('#ask').querySelectorAll('.opt').forEach(b => b.onclick = () => {
+      const ok = b.dataset.c === o.answer; if (ok) got++;
+      $('#ask').querySelectorAll('.opt').forEach(x => { x.disabled = true; if (x.dataset.c === o.answer) x.classList.add('right'); });
+      if (!ok) b.classList.add('wrong');
+      const at = cache.indexOf(o.k);
+      if (o.kind === 'get'){ if (at >= 0){ cache.splice(at, 1); cache.unshift(o.k); } }
+      else { if (at >= 0) cache.splice(at, 1); else if (o.answer !== 'Nothing') cache.splice(cache.indexOf(o.answer), 1); cache.unshift(o.k); }
+      $('#after').innerHTML = `<p class="why">Recency now, newest first: <code>${cache.join(' → ')}</code></p><div class="row" style="margin-top:10px"><button class="btn primary" id="next">Next</button></div>`;
+      $('#next').onclick = () => { i++; step(); }; $('#next').focus({ preventScroll:true });
+      draw();
+    });
+  };
+  step();
+}
+
+/* ---------- token bucket ---------- */
+function bucketDrill(el, onScore){
+  const B = 3, R = 1;
+  const times = []; let t = 0;
+  for (let n = 0; n < 10; n++){ t += Math.random() < 0.55 ? 0.1 + rnd(3) / 10 : 0.8 + rnd(12) / 10; times.push(Math.round(t * 10) / 10); }
+  let tokens = B, last = 0;
+  const truth = times.map(x => { tokens = Math.min(B, tokens + (x - last) * R); last = x; const before = tokens; const ok = tokens >= 1; if (ok) tokens -= 1; return { ok, before }; });
+  let i = 0, got = 0;
+  el.innerHTML = `<p class="how">Capacity B = ${B} tokens, refill R = ${R} token per second, starting full. Each request spends one token if there is one. Allow or deny each request in turn.</p>
+    <div class="timeline" id="tl"></div><div id="ask"></div>`;
+  const draw = () => { $('#tl').innerHTML = times.map((x, n) => `<button class="chip ${n < i ? (truth[n].ok ? 'ok' : 'bad') : ''} ${n === i ? 'cur' : ''}" disabled>t=${x.toFixed(1)}s${n < i ? (truth[n].ok ? ' ✓' : ' ✗') : ''}</button>`).join(''); };
+  const step = () => {
+    draw();
+    if (i >= times.length){ $('#ask').innerHTML = ''; return finish($('#ask'), got, times.length, onScore, () => bucketDrill(el, onScore)); }
+    $('#ask').innerHTML = `<span class="meter">Request ${i + 1} of ${times.length} · ${got} right</span><p class="q">Request at <code>t = ${times[i].toFixed(1)} s</code>?</p>
+      <div class="row"><button class="btn" data-a="1">Allow</button><button class="btn" data-a="0">Deny (429)</button></div><div id="after"></div>`;
+    $('#ask').querySelectorAll('[data-a]').forEach(b => b.onclick = () => {
+      const ok = (b.dataset.a === '1') === truth[i].ok; if (ok) got++;
+      $('#ask').querySelectorAll('[data-a]').forEach(x => x.disabled = true);
+      $('#after').innerHTML = `<p class="why"><b>${ok ? 'Right.' : 'Not quite.'}</b> ${truth[i].before.toFixed(1)} tokens at that moment, so it's ${truth[i].ok ? 'allowed, leaving ' + (truth[i].before - 1).toFixed(1) : 'denied'}.</p><div class="row" style="margin-top:10px"><button class="btn primary" id="next">Next</button></div>`;
+      $('#next').onclick = () => { i++; step(); }; $('#next').focus({ preventScroll:true });
+    });
+  };
+  step();
+}
+
+/* ---------- LOOK elevator ---------- */
+function lookDrill(el, onScore){
+  const ROUNDS = 5; let round = 0, got = 0;
+  el.innerHTML = `<p class="how">The car is on the dark floor, moving in the direction shown. Click the stops in the order LOOK serves them: keep going while there are stops ahead, then reverse.</p><div id="ask"></div>`;
+  const play = () => {
+    if (round >= ROUNDS){ $('#ask').innerHTML = ''; return finish($('#ask'), got, ROUNDS, onScore, () => lookDrill(el, onScore)); }
+    const car = 2 + rnd(9), up = Math.random() < 0.5;
+    const stops = shuffle([...Array(13).keys()].filter(f => f !== car)).slice(0, 5);
+    const above = stops.filter(f => f > car).sort((a, b) => a - b), below = stops.filter(f => f < car).sort((a, b) => b - a);
+    const order = up ? (above.length ? [...above, ...below] : below) : (below.length ? [...below, ...above] : above);
+    const clicked = []; let wrong = false;
+    const draw = () => {
+      $('#ask').innerHTML = `<span class="meter">Round ${round + 1} of ${ROUNDS} · ${got} right</span>
+        <p class="q">Car at floor <b>${car}</b>, moving <b>${up ? 'up ↑' : 'down ↓'}</b>.</p>
+        <div class="shaft">${[...Array(13).keys()].map(f => {
+          const c = f === car ? 'car' : clicked.includes(f) ? (order[clicked.indexOf(f)] === f ? 'done' : 'oops') : stops.includes(f) ? 'stop' : '';
+          return `<button class="floor ${c}" data-f="${f}" ${stops.includes(f) && !clicked.includes(f) && !wrong ? '' : 'disabled'} aria-label="Floor ${f}">${f}</button>`;
+        }).join('')}</div>
+        <div class="hist">${clicked.length ? 'Your order: ' + clicked.join(' → ') : 'Click the first stop.'}</div><div id="after"></div>`;
+      $('#ask').querySelectorAll('.floor.stop').forEach(b => b.onclick = () => {
+        const f = +b.dataset.f; clicked.push(f);
+        if (order[clicked.length - 1] !== f) wrong = true;
+        if (wrong || clicked.length === order.length){
+          if (!wrong) got++;
+          draw();
+          $('#after').innerHTML = `<p class="why"><b>${wrong ? 'Not quite.' : 'Right.'}</b> LOOK order: <code>${order.join(' → ')}</code>. ${up ? 'Going up' : 'Going down'}, it serves ${(up ? above : below).length ? 'every stop ' + (up ? 'above' : 'below') + ' first, then reverses' : 'nothing ahead, so it reverses at once'}.</p><div class="row" style="margin-top:10px"><button class="btn primary" id="next">Next round</button></div>`;
+          $('#next').onclick = () => { round++; play(); }; $('#next').focus({ preventScroll:true });
+        } else draw();
+      });
+    };
+    draw();
+  };
+  play();
+}
+
+/* ---------- elevator states ---------- */
+function statesDrill(el, onScore){
+  const S = ['IDLE','MOVING_UP','MOVING_DOWN','DOORS_OPEN','DOORS_CLOSING','OUT_OF_SERVICE'];
+  const NEXT = { IDLE:['MOVING_UP','MOVING_DOWN','DOORS_OPEN','OUT_OF_SERVICE'], MOVING_UP:['DOORS_OPEN','OUT_OF_SERVICE'], MOVING_DOWN:['DOORS_OPEN','OUT_OF_SERVICE'],
+    DOORS_OPEN:['DOORS_CLOSING'], DOORS_CLOSING:['DOORS_OPEN','IDLE','MOVING_UP','MOVING_DOWN'], OUT_OF_SERVICE:['IDLE'] };
+  const WHY = {
+    'MOVING_UP>MOVING_DOWN':'A car must stop (and open its doors) before reversing.', 'MOVING_DOWN>MOVING_UP':'A car must stop before reversing.',
+    'DOORS_OPEN>MOVING_UP':'Never move with the doors open. They must close first.', 'DOORS_OPEN>MOVING_DOWN':'Never move with the doors open.',
+    'DOORS_OPEN>IDLE':'The doors have to close before the car can rest.', 'OUT_OF_SERVICE>MOVING_UP':'Maintenance mode returns to IDLE first, after checks.',
+    'OUT_OF_SERVICE>MOVING_DOWN':'Maintenance mode returns to IDLE first.', 'MOVING_UP>DOORS_CLOSING':'Doors can\'t be closing while the car is moving.',
+    'DOORS_CLOSING>DOORS_OPEN':'Legal: something blocked the doors, so they reopen.', 'IDLE>DOORS_OPEN':'Legal: someone pressed the call button on this floor.',
+    'MOVING_UP>OUT_OF_SERVICE':'Legal: an emergency stop takes the car out of service.', 'DOORS_CLOSING>MOVING_UP':'Legal: doors are closed, the next stop is above.',
+  };
+  const all = []; for (const a of S) for (const b of S) if (a !== b) all.push([a, b]);
+  const legal = all.filter(([a, b]) => NEXT[a].includes(b)), illegal = all.filter(([a, b]) => !NEXT[a].includes(b));
+  const qs = shuffle([...shuffle(legal).slice(0, 5), ...shuffle(illegal).slice(0, 5)]);
+  let i = 0, got = 0;
+  el.innerHTML = `<p class="how">Ten transitions. Should the controller allow each one, or throw <code>IllegalStateException</code>?</p><div id="ask"></div>`;
+  const step = () => {
+    if (i >= qs.length){ $('#ask').innerHTML = ''; return finish($('#ask'), got, qs.length, onScore, () => statesDrill(el, onScore)); }
+    const [a, b] = qs[i], ok = NEXT[a].includes(b);
+    $('#ask').innerHTML = `<span class="meter">${i + 1} of ${qs.length} · ${got} right</span><p class="q"><code>${a}</code> → <code>${b}</code></p>
+      <div class="row"><button class="btn" data-a="1">Legal</button><button class="btn" data-a="0">Illegal</button></div><div id="after"></div>`;
+    $('#ask').querySelectorAll('[data-a]').forEach(btn => btn.onclick = () => {
+      const right = (btn.dataset.a === '1') === ok; if (right) got++;
+      $('#ask').querySelectorAll('[data-a]').forEach(x => x.disabled = true);
+      const why = WHY[a + '>' + b] || (ok ? 'It\'s in the transition table.' : `From ${a} the only allowed next states are ${NEXT[a].join(', ')}.`);
+      $('#after').innerHTML = `<p class="why"><b>${right ? 'Right' : 'Not quite'}: ${ok ? 'legal' : 'illegal'}.</b> ${why}</p><div class="row" style="margin-top:10px"><button class="btn primary" id="next">Next</button></div>`;
+      $('#next').onclick = () => { i++; step(); }; $('#next').focus({ preventScroll:true });
+    });
+  };
+  step();
+}
+
+/* ---------- settle up ---------- */
+function settleDrill(el, onScore){
+  const NAMES = ['Asha','Ben','Chen','Dev','Ema'];
+  let bal;
+  do { bal = NAMES.map(() => (rnd(13) - 6) * 100); bal[4] = -bal.slice(0, 4).reduce((a, b) => a + b, 0); }
+  while (bal.some(v => v === 0) || Math.abs(bal[4]) > 900);
+  const start = bal.slice();
+  const fewest = minTransfers(start), n = start.filter(v => v).length;
+  let from = null; const log = [];
+  el.innerHTML = `<p class="how">Positive balances are owed money; negative ones owe. Click someone who owes, then someone who is owed: they pay as much as settles one of them. Clear everyone in as few payments as you can.</p><div id="ask"></div>`;
+  const max = Math.max(...start.map(Math.abs));
+  const draw = () => {
+    const doneAll = bal.every(v => v === 0);
+    $('#ask').innerHTML = `<div class="people">${NAMES.map((nm, k) => {
+      const v = bal[k], w = Math.abs(v) / max * 50;
+      return `<button class="person" data-k="${k}" aria-pressed="${from === k}" ${doneAll || v === 0 || (from === null ? v > 0 : v < 0) ? 'disabled' : ''}>
+        <b>${nm}</b><div class="bar2"><i style="left:${v < 0 ? 50 - w : 50}%;width:${w}%;background:var(${v < 0 ? '--bad' : '--ok'})"></i></div>
+        <span class="bal ${v < 0 ? 'neg' : v > 0 ? 'pos' : ''}">${v === 0 ? 'settled' : (v > 0 ? '+' : '−') + '₹' + Math.abs(v)}</span></button>`;
+    }).join('')}</div>
+    <p class="meter" style="margin-top:8px">${from === null ? 'Pick someone who owes.' : NAMES[from] + ' pays… now pick who receives.'} · payments so far: ${log.length}</p>
+    <div class="ledger">${log.map(l => `<span>${l}</span>`).join('')}</div><div id="after"></div>`;
+    $('#ask').querySelectorAll('.person:not(:disabled)').forEach(b => b.onclick = () => {
+      const k = +b.dataset.k;
+      if (from === null){ from = k; return draw(); }
+      const pay = Math.min(-bal[from], bal[k]);
+      bal[from] += pay; bal[k] -= pay; log.push(`${NAMES[from]} → ${NAMES[k]}  ₹${pay}`); from = null;
+      draw();
+      if (bal.every(v => v === 0)){
+        const score = log.length <= fewest ? 1 : log.length <= n - 1 ? 0.8 : 0.5;
+        onScore(score);
+        $('#after').innerHTML = `<p class="why"><b>${log.length} payment${log.length > 1 ? 's' : ''}.</b> Fewest possible here: ${fewest}. ${log.length <= fewest ? 'Optimal.' : log.length <= n - 1 ? 'Within the greedy bound of n − 1 = ' + (n - 1) + '. Look for people whose balances cancel out exactly.' : 'More than n − 1. Pay the largest debtor to the largest creditor each time.'} Finding the true minimum is NP-hard in general; greedy guarantees at most n − 1.</p>
+          <div class="row" style="margin-top:10px"><button class="btn primary" id="again">New group</button></div>`;
+        $('#again').onclick = () => settleDrill(el, onScore); $('#again').focus({ preventScroll:true });
+      }
+    });
+  };
+  draw();
+}
+// Fewest transfers = non-zero people − the most disjoint groups that each sum to zero (subset DP, fine for 5 people).
+function minTransfers(b){
+  const v = b.filter(x => x), n = v.length, full = (1 << n) - 1, sum = new Array(1 << n).fill(0), dp = new Array(1 << n).fill(0);
+  for (let m = 1; m <= full; m++){ const low = m & -m, i = 31 - Math.clz32(low); sum[m] = sum[m ^ low] + v[i]; }
+  for (let m = 1; m <= full; m++){ let bestG = 0; for (let i = 0; i < n; i++) if (m & (1 << i)) bestG = Math.max(bestG, dp[m ^ (1 << i)]); dp[m] = bestG + (sum[m] === 0 ? 1 : 0); }
+  return n - dp[full];
+}
+
+/* ---------- parking race ---------- */
+function raceDrill(el, onScore){
+  let mode = 'check', answered = false;
+  el.innerHTML = `<p class="how">Five free spots, twenty cars, four gates, all at once. In check-then-act, each gate reads which spots are free, then marks one taken a few milliseconds later. Run it both ways.</p>
+    <div class="row"><div class="seg2" role="group" aria-label="Claim strategy"><button data-m="check" aria-pressed="true">Check, then mark</button><button data-m="atomic" aria-pressed="false">Atomic claim (poll)</button></div>
+    <button class="btn primary" id="go">Open the gates</button></div>
+    <div class="lot" id="lot"></div><p class="meter" id="out">Spots are empty.</p><div id="ask"></div>`;
+  const drawLot = spots => { $('#lot').innerHTML = spots.map((cars, s) => `<div class="spot ${cars.length > 1 ? 'double' : cars.length ? 'taken' : ''}"><b>SPOT ${s + 1}</b>${cars.map(c => `<span>car ${c}</span>`).join('')}</div>`).join(''); };
+  drawLot([[], [], [], [], []]);
+  el.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { mode = b.dataset.m; el.querySelectorAll('[data-m]').forEach(x => x.setAttribute('aria-pressed', x === b)); });
+  $('#go').onclick = () => {
+    const spots = [[], [], [], [], []];
+    const cars = [...Array(20).keys()].map(c => ({ c: c + 1, read: rnd(40), delay: 5 + rnd(15) }));
+    if (mode === 'atomic'){
+      const free = [0, 1, 2, 3, 4];
+      cars.sort((a, b) => a.read - b.read).forEach(car => { const s = free.shift(); if (s != null) spots[s].push(car.c); });
+    } else {
+      const writes = [];  // [time, spot]
+      cars.sort((a, b) => a.read - b.read).forEach(car => {
+        const seen = new Set(writes.filter(w => w[0] <= car.read).map(w => w[1]));   // only finished writes are visible
+        const s = [0, 1, 2, 3, 4].find(x => !seen.has(x));
+        if (s != null){ spots[s].push(car.c); writes.push([car.read + car.delay, s]); }
+      });
+    }
+    drawLot(spots);
+    const doubled = spots.filter(c => c.length > 1).length, parked = spots.reduce((a, c) => a + c.length, 0);
+    $('#out').textContent = mode === 'atomic' ? `${parked} cars parked in 5 spots. No spot was given out twice.` : `${parked} cars were told they have a spot, but there are only 5. ${doubled} spot${doubled === 1 ? '' : 's'} double-booked.`;
+    if (!answered && mode === 'check' && doubled){ answered = true; askFix(); }
+  };
+  const askFix = () => {
+    $('#ask').innerHTML = `<p class="q">Which change makes double-booking impossible with several gate servers sharing one database?</p>
+      <div class="opts">${['Add a short sleep between reading and marking','<code>UPDATE spots SET occupied = true WHERE id = ? AND NOT occupied</code> and check the row count','Cache the free list in each gate'].map((o, k) => `<button class="opt" data-k="${k}">${o}</button>`).join('')}</div><div id="after"></div>`;
+    $('#ask').querySelectorAll('.opt').forEach(b => b.onclick = () => {
+      const ok = b.dataset.k === '1';
+      $('#ask').querySelectorAll('.opt').forEach(x => { x.disabled = true; if (x.dataset.k === '1') x.classList.add('right'); });
+      if (!ok) b.classList.add('wrong');
+      onScore(ok ? 1 : 0.5);
+      $('#after').innerHTML = `<p class="why"><b>${ok ? 'Right.' : 'Not quite.'}</b> The check and the claim must be one atomic step. In SQL, a conditional <code>UPDATE</code> (or <code>SELECT … FOR UPDATE SKIP LOCKED</code>) does it; in memory, <code>ConcurrentLinkedQueue.poll()</code>. Sleeps only make the race rarer.</p>`;
+    });
+  };
+}
+
+/* ---------- boot ---------- */
+renderGroups();
+const start = location.hash.slice(1);
+if (DRILLS.some(d => d.id === start)) open(start, false);
+addEventListener('hashchange', () => { const id = location.hash.slice(1); if (DRILLS.some(d => d.id === id)) open(id, true); });
+</script>
+</body>
+</html>

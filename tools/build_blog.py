@@ -858,7 +858,7 @@ def shell(title, desc, body, current=""):
 <body>
 <div class="bar"><div class="wrap">
   <a class="brand" href="../">Load<span>/</span>Bearing</a>
-  <nav aria-label="Site"><a href="../">Play</a><a href="index.html"{' aria-current="page"' if current == "index" else ""}>Field notes</a></nav>
+  <nav aria-label="Site"><a href="../">Play</a><a href="../workshop.html">Workshop</a><a href="index.html"{' aria-current="page"' if current == "index" else ""}>Field notes</a></nav>
 </div></div>
 {body}
 </body>
@@ -895,6 +895,35 @@ def practice_box(p):
     return ""
 
 
+# Workshop drills (workshop.html) that practise each article.
+DRILLS = {
+    "caching": [("writepol", "Cache write policies")],
+    "indexing": [("index", "Index advisor")],
+    "queues": [("kafka", "Delivery guarantees")],
+    "rate-limiting": [("bucket", "Token bucket")],
+    "url-shortener": [("ids", "Short keys and IDs")],
+    "chat": [("chat", "Chat correctness")],
+    "solid-patterns": [("solid", "Spot the principle"), ("patterns", "Name the pattern")],
+    "lru-rate-limiter": [("lru", "LRU eviction"), ("bucket", "Token bucket")],
+    "parking-lot": [("race", "Last spot race")],
+    "splitwise": [("settle", "Settle up")],
+    "elevator": [("look", "Elevator: LOOK order"), ("states", "Elevator: legal moves")],
+}
+
+
+def drill_box(p):
+    ds = DRILLS.get(p["slug"])
+    if not ds:
+        return ""
+    links = " ".join(f'<a class="cta" href="../workshop.html#{d}">{t}</a>' for d, t in ds)
+    return f"""<section class="game">
+  <span class="label">Workshop drill</span>
+  <h2>Do it by hand</h2>
+  <p>Interactive drills for the parts the simulator can't show. Scored, with your best result saved in your browser.</p>
+  <div style="display:flex;flex-wrap:wrap;gap:8px">{links}</div>
+</section>"""
+
+
 def build():
     OUT.mkdir(exist_ok=True)
     for i, p in enumerate(POSTS):
@@ -918,6 +947,7 @@ def build():
 <article class="wrap">
 {p["body"]}
 {practice_box(p)}
+{drill_box(p)}
 <h2>Further reading</h2>
 <ul>{READING[p["section"]]}
 </ul>

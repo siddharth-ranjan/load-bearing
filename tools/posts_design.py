@@ -627,7 +627,7 @@ dict(slug="url-shortener", short="URL shortener", title="URL shortener and ID ge
 # ---------------------------------------------------------------------------
 dict(slug="news-feed", short="News feed", title="News feed and fan-out",
      dek="Precompute every user's feed when someone posts, or assemble it when they open the app? The answer is both.",
-     practice="sandbox",
+     levels=["fanout", "celebrity"], practice="fanout",
      body=f"""
 <p>A news feed shows each user recent posts from the accounts they follow. Users read their feed far more often than anyone posts, and some accounts have millions of followers. The core decision is when to do the work of matching posts to readers.</p>
 
@@ -681,7 +681,7 @@ dict(slug="news-feed", short="News feed", title="News feed and fan-out",
 # ---------------------------------------------------------------------------
 dict(slug="notifications", short="Notifications", title="Notification service",
      dek="Deliver each message once, on the right channel, at the right time, even though every provider and network in the path can fail.",
-     practice="sandbox",
+     levels=["retry"], practice="retry",
      body=f"""
 <p>Every product grows a notification system: order updates by push, receipts by email, one-time passwords by SMS. Dozens of services want to notify users, so it pays to build one shared service that handles preferences, templates, retries and provider quirks in one place.</p>
 
@@ -794,7 +794,7 @@ message 120 is "read by everyone" when min(last_read_seq over members) ≥ 120</
 # ---------------------------------------------------------------------------
 dict(slug="monitoring", short="Monitoring", title="Monitoring and alerting systems",
      dek="Take in a flood of alerts without dropping one, collapse them into incidents a person can act on, and keep working when everything else is on fire.",
-     practice="sandbox",
+     levels=["alertstorm"], practice="alertstorm",
      body=f"""
 <p>An alerting system receives alerts from monitoring tools, deduplicates and groups them, decides who to page, and keeps a history. Its hardest requirement is that it must work best exactly when everything else is failing, because that's when alert volume spikes.</p>
 

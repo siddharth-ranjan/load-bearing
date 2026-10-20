@@ -16,10 +16,18 @@ LEVELS = {
     "hello": (1, "Hello, World"),
     "frontpage": (2, "Front Page"),
     "meltdown": (3, "Database Meltdown"),
-    "photowall": (4, "Photo Wall"),
-    "flashsale": (5, "Flash Sale"),
-    "nines": (6, "Four Nines"),
-    "hypergrowth": (7, "Hypergrowth"),
+    "herd": (4, "Thundering Herd"),
+    "stale": (5, "Stale Reads"),
+    "photowall": (6, "Photo Wall"),
+    "flashsale": (7, "Flash Sale"),
+    "bots": (8, "Bot Swarm"),
+    "retry": (9, "Retry Storm"),
+    "partitions": (10, "Partition Ceiling"),
+    "nines": (11, "Four Nines"),
+    "hypergrowth": (12, "Hypergrowth"),
+    "celebrity": (13, "Celebrity Shard"),
+    "fanout": (14, "Fan-out"),
+    "alertstorm": (15, "Alert Storm"),
 }
 
 FONTS = ('<link rel="preconnect" href="https://fonts.googleapis.com">'
@@ -203,7 +211,7 @@ dict(slug="load-balancing", short="Load balancing", title="Load balancing and ho
 # ---------------------------------------------------------------------------
 dict(slug="caching", short="Caching", title="Caching",
      dek="Keep the answers to popular questions in memory so the database only sees the questions nobody asked recently.",
-     levels=["meltdown", "flashsale", "nines", "hypergrowth"], practice="meltdown",
+     levels=["meltdown", "herd", "flashsale", "nines", "hypergrowth"], practice="herd",
      body=f"""
 <p>Most systems are read-heavy, and most reads ask for the same small set of things: the front page, a popular product, a celebrity's profile. A cache keeps those answers somewhere faster than the database, usually in memory, so a repeat question costs about a millisecond and puts no load on the database.</p>
 
@@ -270,7 +278,7 @@ average latency = h × t_cache + (1 − h) × t_db</div>
 <li>Coalesce requests, so a thousand concurrent misses become one fetch.</li>
 </ul>
 
-<div class="note"><p><strong>In the game:</strong> each level sets a hit rate (85% in <em>Database Meltdown</em>). Adding the cache multiplies the reads reaching your database by 1 − hit rate. One cache costs less than one read replica and removes far more load, which is why it's the cheaper way through that level.</p></div>
+<div class="note"><p><strong>In the game:</strong> each level sets a hit rate (85% in <em>Database Meltdown</em>). Adding the cache multiplies the reads reaching your database by 1 − hit rate. One cache costs less than one read replica and removes far more load, which is why it's the cheaper way through that level. In <em>Thundering Herd</em>, the hot keys expire twice mid-rush; request coalescing, TTL jitter or serving stale each stop the stampede for free.</p></div>
 
 <h2>Interview checklist</h2>
 <ul class="check">
@@ -410,7 +418,7 @@ table: messages   partition key = conversation_id   sort key = sent_at (descendi
 # ---------------------------------------------------------------------------
 dict(slug="replication", short="Replication", title="Database replication",
      dek="Copies of your database give you more read capacity and a standby for when the primary dies. They cost consistency.",
-     levels=["meltdown", "nines"], practice="nines",
+     levels=["meltdown", "stale", "nines"], practice="stale",
      body=f"""
 <p>Replication keeps the same data on several machines. It serves two goals that are easy to mix up: <strong>scaling reads</strong> (more machines can answer queries) and <strong>availability</strong> (if one machine dies, another has the data). It does nothing for write throughput, because every copy has to apply every write.</p>
 
@@ -454,7 +462,7 @@ dict(slug="replication", short="Replication", title="Database replication",
 <h2>Replicas or a cache?</h2>
 <p>Both reduce load on the primary. A cache is cheaper per read served and faster, but it only helps with repeated reads and needs invalidation. Replicas handle any query, including ad-hoc and analytical ones, and double as failover standbys, but each one costs as much as a database. Many systems use both.</p>
 
-<div class="note"><p><strong>In the game:</strong> each replica adds 1,500 reads/s. In <em>Four Nines</em>, the primary dies at 38 s. With a replica, you lose 2 seconds of writes while it's promoted. Without one, every database request fails for 12 seconds.</p></div>
+<div class="note"><p><strong>In the game:</strong> each replica adds 1,500 reads/s. In <em>Four Nines</em>, the primary dies at 38 s. With a replica, you lose 2 seconds of writes while it's promoted. Without one, every database request fails for 12 seconds. In <em>Stale Reads</em>, 15% of reads are users checking their own edits: sending every read to any replica shows them old data, sending everything to the primary overloads it, and routing only post-write reads to the primary fixes both.</p></div>
 
 <h2>Interview checklist</h2>
 <ul class="check">
@@ -521,7 +529,7 @@ Cache-Control: private, no-store                               # per-user data</
 # ---------------------------------------------------------------------------
 dict(slug="queues", short="Queues", title="Message queues and backpressure",
      dek="Accept work now, do it at a pace you can sustain, and make sure you eventually catch up.",
-     levels=["flashsale"], practice="flashsale",
+     levels=["flashsale", "retry", "partitions"], practice="retry",
      body=f"""
 <p>In a synchronous design, the user waits while every step runs: validate, charge, write, email. If the slowest step can handle 600 operations a second and 1,000 people click "Buy" at once, 400 of them get errors.</p>
 <p>A message queue splits <em>accepting</em> work from <em>doing</em> it. The API checks the request, puts a message on the queue, and immediately answers "order received". Workers pull messages off the queue and do the slow part at whatever rate the downstream system can handle.</p>
@@ -584,7 +592,7 @@ drain time afterwards  = 3,560 ÷ (500 − 315) ≈ 19 s</div>
 <h2>The product cost</h2>
 <p>Asynchronous work changes what users see. The UI shows "processing", emails arrive a few seconds late, and you need a way to tell the user if something failed after you said "received". That's usually a good trade, but it's a product decision, not only an engineering one.</p>
 
-<div class="note"><p><strong>In the game:</strong> with a queue, writes are acknowledged in about 4 ms whatever the database load. Workers drain 250 writes/s each, capped by database write capacity. The level checks that the queue is less than 10 seconds behind at the end, which fails if workers can't beat the average arrival rate.</p></div>
+<div class="note"><p><strong>In the game:</strong> with a queue, writes are acknowledged in about 4 ms whatever the database load. Workers drain 250 writes/s each, capped by database write capacity. The level checks that the queue is less than 10 seconds behind at the end, which fails if workers can't beat the average arrival rate. <em>Retry Storm</em> adds a flaky card processor and poison messages: you need backoff, idempotency keys and a dead-letter queue together. <em>Partition Ceiling</em> shows workers sitting idle once they outnumber the partitions.</p></div>
 
 <h2>Interview checklist</h2>
 <ul class="check">
@@ -599,7 +607,7 @@ drain time afterwards  = 3,560 ÷ (500 − 315) ≈ 19 s</div>
 # ---------------------------------------------------------------------------
 dict(slug="rate-limiting", short="Rate limiting", title="Rate limiting",
      dek="Decide how much each client may ask for, and say no early and cheaply when they ask for more.",
-     levels=["flashsale"], practice="flashsale",
+     levels=["bots"], practice="bots",
      body=f"""
 <p>A rate limiter caps how many requests a client can make in a period of time. It protects you from abuse (scrapers, credential stuffing, a buggy client stuck in a retry loop), keeps one tenant from starving the others, and controls costs when each request calls something expensive. It's also <strong>load shedding</strong>: turning away excess work cheaply at the door instead of letting it overload the database.</p>
 <p>A rejected request gets <code>HTTP 429 Too Many Requests</code>, ideally with a <code>Retry-After</code> header so well-behaved clients know when to come back.</p>
@@ -662,7 +670,7 @@ RateLimit-Remaining: 0
 RateLimit-Reset: 12</div>
 <p>Client libraries should back off with jitter when they see 429. Otherwise every rejected client retries at the same moment and the spike repeats.</p>
 
-<div class="note"><p><strong>In the game:</strong> there's no rate limiter component yet. In <em>Flash Sale</em>, a limiter is the other half of the queue: the queue absorbs real orders, and a per-user limit stops bots from filling that queue. Every request you reject cheaply at the edge is one the app tier and the database never see.</p></div>
+<div class="note"><p><strong>In the game:</strong> in <em>Bot Swarm</em>, 70% of the traffic is bots and a third of real users share office IPs. Limiting by IP blocks those users; limiting by API key doesn't. A fixed window lets the bots double up at every reset, which shows as an error spike every 10 seconds. A sliding window or token bucket removes it.</p></div>
 
 <h2>Interview checklist</h2>
 <ul class="check">
@@ -741,7 +749,7 @@ parallel: A = 1 − (1 − A₁) × (1 − A₂)
 # ---------------------------------------------------------------------------
 dict(slug="sharding", short="Sharding", title="Sharding and consistent hashing",
      dek="When one primary can't absorb your writes, split the data so each database owns a slice.",
-     levels=["hypergrowth"], practice="hypergrowth",
+     levels=["hypergrowth", "celebrity"], practice="celebrity",
      body=f"""
 <p>Caches and replicas scale reads. Writes are different: every replica still applies every write, so a single primary is a hard ceiling on write throughput and on how much data fits on one machine. <strong>Sharding</strong> (horizontal partitioning) breaks that ceiling. Each shard is a full, independent database that owns a subset of the rows.</p>
 
@@ -781,7 +789,7 @@ dict(slug="sharding", short="Sharding", title="Sharding and consistent hashing",
 <li><strong>Re-sharding</strong> is a project. Starting with more logical shards than machines (say 256 logical shards on 8 servers) lets you move whole logical shards later rather than splitting them.</li>
 </ul>
 
-<div class="note"><p><strong>In the game:</strong> each database you add in <em>Hypergrowth</em> is another shard with 600 writes/s of capacity. About 2,500 writes/s at peak means at least five shards, and six keeps write latency comfortable. The CDN and cache keep reads off the shards, so the budget goes on write capacity.</p></div>
+<div class="note"><p><strong>In the game:</strong> each database you add in <em>Hypergrowth</em> is another shard with 600 writes/s of capacity. About 2,500 writes/s at peak means at least five shards, and six keeps write latency comfortable. The CDN and cache keep reads off the shards, so the budget goes on write capacity. <em>Celebrity Shard</em> lets you choose the shard key and the key-to-shard mapping, then adds a shard mid-run: watch one shard turn red with a range or plain user_id key, and the rebalance overload every shard with hash mod N.</p></div>
 
 <h2>Interview checklist</h2>
 <ul class="check">

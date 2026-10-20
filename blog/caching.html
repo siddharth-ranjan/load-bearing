@@ -19,7 +19,7 @@
   <span class="label">Fundamentals · 03 of 22</span>
   <h1>Caching</h1>
   <p class="dek">Keep the answers to popular questions in memory so the database only sees the questions nobody asked recently.</p>
-  <div class="meta"><span>4 min read</span><span>Used in: <a href="../#meltdown">3 · Database Meltdown</a>, <a href="../#flashsale">5 · Flash Sale</a>, <a href="../#nines">6 · Four Nines</a>, <a href="../#hypergrowth">7 · Hypergrowth</a></span></div>
+  <div class="meta"><span>4 min read</span><span>Used in: <a href="../#meltdown">3 · Database Meltdown</a>, <a href="../#herd">4 · Thundering Herd</a>, <a href="../#flashsale">7 · Flash Sale</a>, <a href="../#nines">11 · Four Nines</a>, <a href="../#hypergrowth">12 · Hypergrowth</a></span></div>
 </header>
 <article class="wrap">
 
@@ -81,7 +81,7 @@ average latency = h × t_cache + (1 − h) × t_db</div>
 <li>Coalesce requests, so a thousand concurrent misses become one fetch.</li>
 </ul>
 
-<div class="note"><p><strong>In the game:</strong> each level sets a hit rate (85% in <em>Database Meltdown</em>). Adding the cache multiplies the reads reaching your database by 1 − hit rate. One cache costs less than one read replica and removes far more load, which is why it's the cheaper way through that level.</p></div>
+<div class="note"><p><strong>In the game:</strong> each level sets a hit rate (85% in <em>Database Meltdown</em>). Adding the cache multiplies the reads reaching your database by 1 − hit rate. One cache costs less than one read replica and removes far more load, which is why it's the cheaper way through that level. In <em>Thundering Herd</em>, the hot keys expire twice mid-rush; request coalescing, TTL jitter or serving stale each stop the stampede for free.</p></div>
 
 <h2>Interview checklist</h2>
 <ul class="check">
@@ -94,9 +94,9 @@ average latency = h × t_cache + (1 − h) × t_db</div>
 
 <section class="game">
   <span class="label">Practise it</span>
-  <h2>Level 3: Database Meltdown</h2>
+  <h2>Level 4: Thundering Herd</h2>
   <p>Put this into practice against live traffic. Your progress in the game is saved in your browser.</p>
-  <a class="cta" href="../#meltdown">Play level 3</a>
+  <a class="cta" href="../#herd">Play level 4</a>
 </section>
 <h2>Further reading</h2>
 <ul>

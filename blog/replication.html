@@ -19,7 +19,7 @@
   <span class="label">Fundamentals · 06 of 22</span>
   <h1>Database replication</h1>
   <p class="dek">Copies of your database give you more read capacity and a standby for when the primary dies. They cost consistency.</p>
-  <div class="meta"><span>3 min read</span><span>Used in: <a href="../#meltdown">3 · Database Meltdown</a>, <a href="../#nines">6 · Four Nines</a></span></div>
+  <div class="meta"><span>3 min read</span><span>Used in: <a href="../#meltdown">3 · Database Meltdown</a>, <a href="../#stale">5 · Stale Reads</a>, <a href="../#nines">11 · Four Nines</a></span></div>
 </header>
 <article class="wrap">
 
@@ -60,7 +60,7 @@
 <h2>Replicas or a cache?</h2>
 <p>Both reduce load on the primary. A cache is cheaper per read served and faster, but it only helps with repeated reads and needs invalidation. Replicas handle any query, including ad-hoc and analytical ones, and double as failover standbys, but each one costs as much as a database. Many systems use both.</p>
 
-<div class="note"><p><strong>In the game:</strong> each replica adds 1,500 reads/s. In <em>Four Nines</em>, the primary dies at 38 s. With a replica, you lose 2 seconds of writes while it's promoted. Without one, every database request fails for 12 seconds.</p></div>
+<div class="note"><p><strong>In the game:</strong> each replica adds 1,500 reads/s. In <em>Four Nines</em>, the primary dies at 38 s. With a replica, you lose 2 seconds of writes while it's promoted. Without one, every database request fails for 12 seconds. In <em>Stale Reads</em>, 15% of reads are users checking their own edits: sending every read to any replica shows them old data, sending everything to the primary overloads it, and routing only post-write reads to the primary fixes both.</p></div>
 
 <h2>Interview checklist</h2>
 <ul class="check">
@@ -73,9 +73,9 @@
 
 <section class="game">
   <span class="label">Practise it</span>
-  <h2>Level 6: Four Nines</h2>
+  <h2>Level 5: Stale Reads</h2>
   <p>Put this into practice against live traffic. Your progress in the game is saved in your browser.</p>
-  <a class="cta" href="../#nines">Play level 6</a>
+  <a class="cta" href="../#stale">Play level 5</a>
 </section>
 <h2>Further reading</h2>
 <ul>

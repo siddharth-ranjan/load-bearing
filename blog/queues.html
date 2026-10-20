@@ -19,7 +19,7 @@
   <span class="label">Fundamentals · 08 of 22</span>
   <h1>Message queues and backpressure</h1>
   <p class="dek">Accept work now, do it at a pace you can sustain, and make sure you eventually catch up.</p>
-  <div class="meta"><span>5 min read</span><span>Used in: <a href="../#flashsale">5 · Flash Sale</a></span></div>
+  <div class="meta"><span>5 min read</span><span>Used in: <a href="../#flashsale">7 · Flash Sale</a>, <a href="../#retry">9 · Retry Storm</a>, <a href="../#partitions">10 · Partition Ceiling</a></span></div>
 </header>
 <article class="wrap">
 
@@ -71,7 +71,7 @@ drain time afterwards  = 3,560 ÷ (500 − 315) ≈ 19 s</div>
 <h2>The product cost</h2>
 <p>Asynchronous work changes what users see. The UI shows "processing", emails arrive a few seconds late, and you need a way to tell the user if something failed after you said "received". That's usually a good trade, but it's a product decision, not only an engineering one.</p>
 
-<div class="note"><p><strong>In the game:</strong> with a queue, writes are acknowledged in about 4 ms whatever the database load. Workers drain 250 writes/s each, capped by database write capacity. The level checks that the queue is less than 10 seconds behind at the end, which fails if workers can't beat the average arrival rate.</p></div>
+<div class="note"><p><strong>In the game:</strong> with a queue, writes are acknowledged in about 4 ms whatever the database load. Workers drain 250 writes/s each, capped by database write capacity. The level checks that the queue is less than 10 seconds behind at the end, which fails if workers can't beat the average arrival rate. <em>Retry Storm</em> adds a flaky card processor and poison messages: you need backoff, idempotency keys and a dead-letter queue together. <em>Partition Ceiling</em> shows workers sitting idle once they outnumber the partitions.</p></div>
 
 <h2>Interview checklist</h2>
 <ul class="check">
@@ -85,9 +85,9 @@ drain time afterwards  = 3,560 ÷ (500 − 315) ≈ 19 s</div>
 
 <section class="game">
   <span class="label">Practise it</span>
-  <h2>Level 5: Flash Sale</h2>
+  <h2>Level 9: Retry Storm</h2>
   <p>Put this into practice against live traffic. Your progress in the game is saved in your browser.</p>
-  <a class="cta" href="../#flashsale">Play level 5</a>
+  <a class="cta" href="../#retry">Play level 9</a>
 </section>
 <h2>Further reading</h2>
 <ul>

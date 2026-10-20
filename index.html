@@ -126,6 +126,15 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius
 .step button{width:28px;height:30px;border:0;background:none;cursor:pointer;font-size:16px;font-weight:700}
 .step button:disabled{opacity:.3;cursor:not-allowed}
 .step output{min-width:22px;text-align:center;font-family:var(--f-mono);font-size:14px;font-weight:600}
+.pol{display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid var(--line);border-radius:5px;font-size:14px}
+.pol .d{font-size:12px;color:var(--muted);line-height:1.35}
+.pol.tog{flex-direction:row;align-items:flex-start;gap:10px;cursor:pointer}
+.pol.tog input{margin-top:3px;accent-color:var(--accent);width:16px;height:16px;flex:none}
+.pol.tog > span{display:flex;flex-direction:column;gap:2px}
+.pseg{display:flex;flex-wrap:wrap}
+.pseg button{flex:1 1 auto;font-size:11px;padding:6px 8px}
+.pseg button[aria-checked="true"]{background:var(--ink);color:var(--bg)}
+.pseg button:disabled{opacity:.5;cursor:not-allowed}
 .budget{padding:10px 4px 2px;display:flex;flex-direction:column;gap:6px}
 .budget .row{display:flex;justify-content:space-between;align-items:baseline;font-family:var(--f-mono);font-size:13px}
 .budget .row b{font-size:18px}
@@ -194,7 +203,7 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius
           <button data-speed="14" aria-pressed="false">4×</button>
         </div>
         <span class="spacer"></span>
-        <div class="legend"><span><i style="background:var(--accent)"></i>read</span><span><i style="background:var(--write)"></i>write</span><span><i style="background:var(--ok)"></i>cache / edge hit</span><span><i style="background:var(--bad)"></i>failed</span></div>
+        <div class="legend"><span><i style="background:var(--accent)"></i>read</span><span><i style="background:var(--write)"></i>write</span><span><i style="background:var(--ok)"></i>cache / edge hit</span><span><i style="background:var(--warn)"></i>stale</span><span><i style="background:var(--muted)"></i>rate-limited</span><span><i style="background:var(--bad)"></i>failed</span></div>
       </div>
       <div class="result" id="result" hidden></div>
     </section>
@@ -203,7 +212,7 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius
       <div class="tile"><span class="label">Traffic</span><span class="v" id="tRps">0</span><span class="sub" id="tRpsSub">req/s</span><canvas id="sRps"></canvas></div>
       <div class="tile"><span class="label">p95 latency</span><span class="v" id="tP95">—</span><span class="sub" id="tP95Sub">target</span><canvas id="sP95"></canvas></div>
       <div class="tile"><span class="label">Errors</span><span class="v" id="tErr">—</span><span class="sub" id="tErrSub">target</span><canvas id="sErr"></canvas></div>
-      <div class="tile"><span class="label">Queue lag</span><span class="v" id="tLag">—</span><span class="sub" id="tLagSub">writes waiting</span><canvas id="sLag"></canvas></div>
+      <div class="tile"><span class="label" id="tLagLabel">Queue lag</span><span class="v" id="tLag">—</span><span class="sub" id="tLagSub">writes waiting</span><canvas id="sLag"></canvas></div>
     </section>
 
     <section class="pane log" id="log" aria-live="polite"></section>
@@ -216,9 +225,16 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius
 
 <script>
 /*SIM-START*/
-const CAP = { app:1000, dbRead:1500, dbWrite:600, replica:1500, worker:250, cdnHit:0.95, queueMax:200000, cache:60000 };
-const LAT = { net:18, far:130, edge:14, lb:1, app:22, cache:1.5, db:9, ack:4 };
-const COST = { cdn:50, lb:20, app:70, cache:60, db:150, replica:100, queue:30, worker:40 };
+const CAP = { app:1000, dbRead:1500, dbWrite:600, replica:1500, worker:250, fanout:20000, cdnHit:0.95, queueMax:5000000, cache:60000, migrate:900 };
+const LAT = { net:18, far:130, edge:14, limiter:1, lb:1, app:22, cache:1.5, db:9, ack:4, durable:4, scatter:15, merge:8 };
+const COST = { cdn:50, limiter:25, lb:20, app:70, cache:60, db:150, replica:100, queue:30, partition:5, worker:40 };
+
+// Share of bot traffic each algorithm stops. A fixed window lets a double burst through at every boundary.
+const LIMITER = { fixed:{ block:0.97, edge:0.4, fp:0.004 }, sliding:{ block:0.97, fp:0.002 }, token:{ block:0.96, fp:0.001 } };
+
+// The naive choice is the default for every policy.
+const POLICY_DEFAULTS = { algo:'fixed', key:'ip', coalesce:false, jitter:false, swr:false, route:'any', shardKey:'range', ring:'mod',
+  retry:'none', idem:false, dlq:false, fanout:'push', ack:'receipt', dedupe:false, correlate:false, watchdog:false };
 
 function costOf(cfg){ let c = 0; for (const k in COST) c += (cfg[k] || 0) * COST[k]; return c; }
 
@@ -232,29 +248,57 @@ function trafficAt(sc, t){
 }
 
 function faultsAt(sc, t){
-  const fx = { appDown:false, dbDown:false, blip:false };
+  const fx = { appDown:false, dbDown:false, blip:false, workerDown:false, workerT:0, stampede:false, flaky:false, migrating:false };
   for (const f of sc.failures || []){
     if (t >= f.at && t < f.until){
       if (f.kind === 'app') fx.appDown = true;
+      else if (f.kind === 'worker'){ fx.workerDown = true; fx.workerT = t - f.at; }
       else { fx.dbDown = true; if (t < f.at + 2) fx.blip = true; }
     }
   }
+  if (sc.stampede) fx.stampede = sc.stampede.at.some(a => t >= a && t < a + sc.stampede.dur);
+  if (sc.flaky) fx.flaky = t >= sc.flaky.at && t < sc.flaky.until;
+  if (sc.shard && sc.shard.reshardAt != null) fx.migrating = t >= sc.shard.reshardAt && t < sc.shard.reshardAt + sc.shard.dur;
   return fx;
+}
+
+// How a shard key spreads load. w/r: share of writes/reads on the hottest shard; *Hot: how many shards are that hot.
+function shardShares(key, n, celeb){
+  if (key === 'range') return { w:1, wHot:1, r:0.6, rHot:1, scatter:false };
+  if (key === 'post') return { w:1 / n, wHot:n, r:1, rHot:1, scatter:true };       // every timeline read asks every shard
+  if (key === 'user'){ const s = Math.min(1, celeb + (1 - celeb) / n); return { w:s, wHot:1, r:s, rHot:1, scatter:false }; }
+  return { w:1 / n, wHot:n, r:1 / n, rHot:n, scatter:false };                       // salted: celebrity spread across shards
 }
 
 const qwait = (base, rho) => base / (1 - Math.min(rho, 0.97));
 
 // One slice of time: where does every request go, how long does it take, and what breaks.
-function evaluate(cfg, sc, lam, fx, backlog, dt){
+// S carries state between slices (poison messages, pages sent, one-off events).
+function evaluate(cfg, sc, lam, fx, backlog, dt, S = {}, t = 0){
+  const P = Object.assign({}, POLICY_DEFAULTS, cfg.p);
   const far = sc.far || 0;
   const C = [];
   const add = (lat, n) => { if (n > 0){ C.push([lat, n * (1 - far)]); if (far > 0) C.push([lat + LAT.far, n * far]); } };
-  let failed = 0;
+  let failed = 0, stale = 0, dupes = 0;
 
-  let st = lam * sc.static, dyn = lam - st, cdnServed = 0;
-  if (cfg.cdn){ cdnServed = st * CAP.cdnHit; st -= cdnServed; C.push([LAT.edge, cdnServed]); }
+  // Rate limiter in front of everything.
+  const offered = lam;
+  let legit = lam, bots = 0, blocked = 0, fpBlocked = 0;
+  if (sc.bots){
+    bots = lam * sc.bots; legit = lam - bots;
+    if (cfg.limiter){
+      const A = LIMITER[P.algo];
+      const edge = P.algo === 'fixed' && (t % 10) < 1;
+      blocked = bots * (edge ? A.edge : A.block);
+      fpBlocked = legit * (P.key === 'ip' ? sc.nat * 0.5 : A.fp);
+    }
+    lam -= blocked + fpBlocked;
+  }
 
-  const origin = st + dyn;
+  let stc = lam * sc.static, dyn = lam - stc, cdnServed = 0;
+  if (cfg.cdn){ cdnServed = stc * CAP.cdnHit; stc -= cdnServed; C.push([LAT.edge, cdnServed]); }
+
+  const origin = stc + dyn;
   const up = Math.max(0, cfg.app - (fx.appDown ? 1 : 0));
   const usable = cfg.lb ? up : (cfg.app >= 1 && !fx.appDown ? 1 : 0);
   const appCap = usable * CAP.app;
@@ -263,12 +307,22 @@ function evaluate(cfg, sc, lam, fx, backlog, dt){
   const rhoA = appCap ? origin / appCap : (origin > 0 ? 1 : 0);
   const appLat = qwait(LAT.app, rhoA);
   const k = origin ? appOk / origin : 0;
-  const stOk = st * k, dynOk = dyn * k;
-  const pre = LAT.net + (cfg.lb ? LAT.lb : 0) + appLat;
+  const stOk = stc * k, dynOk = dyn * k;
+  const pre = LAT.net + (cfg.limiter ? LAT.limiter : 0) + (cfg.lb ? LAT.lb : 0) + appLat;
   add(pre, stOk);
 
   const reads = dynOk * sc.read, writes = dynOk - reads;
-  const hit = cfg.cache ? sc.hit : 0;
+
+  // ---- reads ----
+  let hit = cfg.cache ? sc.hit : 0, amp = 1, extraLat = 0;
+  if (cfg.cache && fx.stampede){
+    let f = 1; if (P.coalesce) f *= 0.03; if (P.jitter) f *= 0.3; if (P.swr) f *= 0.05;
+    hit = Math.max(0, hit - sc.stampede.share * f);
+  }
+  if (sc.feed){
+    if (P.fanout === 'pull'){ amp = sc.feed.K * (cfg.cache ? 0.05 : 1); hit = 0; extraLat = LAT.merge; }
+    else hit = cfg.cache ? 0.99 : 0;
+  }
   const cHit = reads * hit;
   add(pre + LAT.cache, cHit);
   const dbReads = reads - cHit;
@@ -283,41 +337,132 @@ function evaluate(cfg, sc, lam, fx, backlog, dt){
 
   const readFail = cfg.db ? dbReads * shardLost : dbReads;
   const readLive = dbReads - readFail;
-  const rCap = shards * CAP.dbRead + reps * CAP.replica;
-  const readOk = Math.min(readLive, rCap), readDrop = readLive - readOk;
+  let readOk = 0, readDrop = 0, rhoR = 0, staleRate = 0;
+  const sh = sc.shard && cfg.db ? shardShares(P.shardKey, cfg.db, sc.shard.celeb) : null;
+  if (sh){
+    const per = readLive * amp * sh.r, over = Math.max(0, per - CAP.dbRead);
+    readDrop = per > 0 ? readLive * Math.min(1, sh.r * sh.rHot) * (over / per) : 0;
+    rhoR = per / CAP.dbRead;
+    if (sh.scatter) extraLat += LAT.scatter;
+  } else if (sc.ryw && reps > 0){
+    const pCap = Math.max(0, shards) * CAP.dbRead, rpCap = reps * CAP.replica, ryw = readLive * sc.ryw;
+    let pLoad, rLoad;
+    if (P.route === 'any'){ const share = rpCap / (pCap + rpCap); rLoad = readLive * share; pLoad = readLive - rLoad; staleRate = ryw * share * 0.7; }
+    else if (P.route === 'session'){ rLoad = Math.min(readLive - ryw, rpCap * 0.9); pLoad = readLive - rLoad; }
+    else { pLoad = readLive; rLoad = 0; }
+    readDrop = Math.max(0, pLoad - pCap) + Math.max(0, rLoad - rpCap);
+    rhoR = Math.max(pCap ? pLoad / pCap : (pLoad > 0 ? 1 : 0), rpCap ? rLoad / rpCap : 0);
+  } else {
+    const units = readLive * amp, rCap = Math.max(0, shards) * CAP.dbRead + reps * CAP.replica;
+    readDrop = units > rCap ? readLive * (units - rCap) / units : 0;
+    rhoR = rCap ? units / rCap : (units > 0 ? 1 : 0);
+  }
+  readOk = readLive - readDrop;
   failed += readFail + readDrop;
-  const rhoR = rCap ? readLive / rCap : (readLive > 0 ? 1 : 0);
-  add(pre + (cfg.cache ? LAT.cache : 0) + qwait(LAT.db, rhoR), readOk);
+  stale = Math.min(staleRate, readOk);
+  add(pre + (cfg.cache ? LAT.cache : 0) + extraLat + qwait(LAT.db, rhoR), readOk);
 
-  const wCap = Math.max(0, shards) * CAP.dbWrite;
-  let wLoad = 0, writeOk = 0, writeBad = 0, enq = 0, drainCap = 0;
-  if (cfg.queue){
+  // ---- writes ----
+  let wAmp = 1, lostFrac = 0, dupFrac = 0;
+  if (fx.flaky){
+    const p = sc.flaky.p;
+    if (P.retry === 'none') lostFrac = p;
+    else if (P.retry === 'immediate'){
+      // Instant retries pile onto a struggling processor, so more calls fail, and all three quick tries land in the outage.
+      const pe = Math.min(0.9, p * (1 + 3 * p));
+      wAmp = 1 + 3 * pe; lostFrac = Math.pow(pe, 3); dupFrac = P.idem ? 0 : pe * 0.5;
+    } else { wAmp = 1 + 1.1 * p; lostFrac = Math.pow(p, 3); dupFrac = P.idem ? 0 : p * 0.5; }
+  }
+  const nShards = Math.max(0, shards);
+  let wShare = nShards ? 1 / nShards : 1, wHot = nShards || 1;
+  if (sh){ wShare = sh.w; wHot = sh.wHot; }
+  const mig = fx.migrating ? (P.ring === 'consistent' ? 1 / (cfg.db + 1) : cfg.db / (cfg.db + 1)) * CAP.migrate : 0;
+
+  const workersDown = fx.workerDown && (!P.watchdog || fx.workerT < 2);
+  const workersIdle = sc.partitions ? Math.max(0, (cfg.worker || 0) - (cfg.partition || 0)) : 0;
+  const workersEff = workersDown ? 0 : (cfg.worker || 0) - workersIdle;
+
+  const writesViaQueue = cfg.queue && !sc.feed;
+  let writeOk = 0, writeBad = 0, enq = 0, drainCap = 0, drainRate = 0, wUtil = 0, workerUtil = 0;
+  if (writesViaQueue){
     enq = writes; backlog += writes * dt;
     if (backlog > CAP.queueMax){ const over = (backlog - CAP.queueMax) / dt; failed += over; enq -= over; writeBad += over; backlog = CAP.queueMax; }
-    add(pre + LAT.ack, enq);
-    drainCap = Math.min((cfg.worker || 0) * CAP.worker, wCap);
+    add(pre + LAT.ack + (sc.alerts && P.ack === 'durable' ? LAT.durable : 0), enq);
+    let poisonLoad = 0;
+    if (sc.poison){
+      if (P.dlq) poisonLoad = enq * sc.poison * 3;                       // three tries, then parked
+      else { S.poison = (S.poison || 0) + enq * sc.poison * dt; poisonLoad = S.poison * 2; }  // retried twice a second, forever
+    }
+    const raw = workersEff * CAP.worker;
+    const dbAttempts = nShards ? Math.max(0, CAP.dbWrite - mig) / wShare : 0;
+    const attempts = Math.max(0, Math.min(raw - Math.min(poisonLoad, raw), dbAttempts));
+    drainCap = attempts / wAmp;
     const drained = Math.min(backlog, drainCap * dt);
-    backlog -= drained; wLoad = drained / dt;
+    backlog -= drained; drainRate = drained / dt;
+    failed += drainRate * lostFrac; writeBad += drainRate * lostFrac; dupes += drainRate * dupFrac;
+    wUtil = nShards ? (drainRate * wAmp * wShare + mig) / CAP.dbWrite : 0;
+    workerUtil = raw ? Math.min(1, (drainRate * wAmp + Math.min(poisonLoad, raw)) / raw) : 0;
   } else {
     const lost = cfg.db ? writes * writeLost : writes;
     const live = writes - lost;
-    writeOk = Math.min(live, wCap);
-    writeBad = lost + (live - writeOk);
-    failed += writeBad; wLoad = live;
-    add(pre + qwait(LAT.db * 1.6, wCap ? live / wCap : 1), writeOk);
+    const per = live * wAmp * wShare + mig, over = Math.max(0, per - CAP.dbWrite);
+    const bad = !nShards ? live : (per > 0 ? live * Math.min(1, wShare * wHot) * (over / per) : 0);
+    let ok = live - bad;
+    let slow = 0;
+    if (sc.feed && P.fanout !== 'pull' && !cfg.queue){ slow = ok; ok = 0; }  // inline fan-out times out
+    writeBad = lost + bad + slow + ok * lostFrac;
+    failed += writeBad;
+    dupes += ok * dupFrac;
+    writeOk = ok * (1 - lostFrac);
+    wUtil = nShards ? per / CAP.dbWrite : (live > 0 ? 1 : 0);
+    add(pre + qwait(LAT.db * 1.6, wUtil), writeOk);
   }
 
-  const lag = cfg.queue ? (backlog > 0.5 ? (drainCap > 0 ? backlog / drainCap : Infinity) : 0) : 0;
+  // Feed fan-out: the queue carries feed-cache inserts, drained by workers into the cache.
+  if (sc.feed && cfg.queue && P.fanout !== 'pull'){
+    const ins = writes * sc.feed.F;
+    enq = ins; backlog += ins * dt;
+    if (t >= sc.feed.celebAt && !S.celeb){ S.celeb = true; if (P.fanout === 'push') backlog += sc.feed.C; }
+    drainCap = workersEff * CAP.fanout;
+    const drained = Math.min(backlog, drainCap * dt);
+    backlog -= drained; drainRate = drained / dt;
+    workerUtil = drainCap ? drainRate / drainCap : 0;
+  }
+
+  // Alerting pipeline: lost alerts, pages and silent failures.
+  if (sc.alerts){
+    S.pages = S.pages || 0; S.lost = S.lost || 0; S.silent = S.silent || 0;
+    if (fx.appDown && !S.crashed){ S.crashed = true; if (P.ack === 'receipt') S.lost += origin / Math.max(1, cfg.app); }
+    const storm = (sc.spikes || []).some(([a, b]) => t >= a && t < b);
+    if (storm && !S.storm){ S.storm = true; if (P.dedupe) S.pages += P.correlate ? 1 : 40; }
+    if (!P.dedupe) S.pages += writes * 0.05 * dt;
+    if (fx.workerDown){ if (P.watchdog){ if (!S.dms){ S.dms = true; S.pages += 1; } } else S.silent += dt; }
+  }
+
+  // With bots in the mix, only real users count towards errors and latency.
+  let denom = lam, failedOut = failed;
+  if (sc.bots){
+    const share = lam ? (legit - fpBlocked) / lam : 0;
+    failedOut = fpBlocked + failed * share; denom = legit;
+    for (const c of C) c[1] *= share;
+    stale *= share;
+  }
+
+  const queued = cfg.queue && (writesViaQueue || (sc.feed && P.fanout !== 'pull'));
+  const lag = queued ? (backlog > 0.5 ? (drainCap > 0 ? backlog / drainCap : Infinity) : 0) : 0;
   return {
-    C, failed, total: lam, backlog, lag, usable, shards, reps, promoted, fx,
+    C, failed: failedOut, total: denom, offered, bots, backlog, lag, usable, shards, reps, promoted, fx,
+    stale, dupes, workersEff, workersIdle, workersDown, mig, sh,
     util: {
       app: usable ? rhoA : 0,
-      db: Math.max(rCap ? readLive / rCap : 0, wCap ? wLoad / wCap : 0),
+      db: Math.max(rhoR, wUtil),
       cache: cHit / CAP.cache,
-      worker: cfg.worker ? wLoad / (cfg.worker * CAP.worker) : 0,
+      worker: workerUtil,
       cdn: cdnServed / 200000,
+      limiter: (blocked + fpBlocked) / Math.max(1, offered),
     },
-    flow: { cdn: cdnServed, appDrop, stOk, cHit, readOk, readBad: readFail + readDrop, writeOk, writeBad, enq, drain: cfg.queue ? wLoad : 0 },
+    flow: { cdn: cdnServed, blocked, fp: fpBlocked, appDrop, stOk, cHit, readOk: readOk - stale, stale, readBad: readFail + readDrop,
+      writeOk, writeBad, enq, drain: queued ? drainRate : 0 },
   };
 }
 
@@ -338,11 +483,12 @@ function histP(h, q){
   return Math.pow(BASE, NB);
 }
 
-function newRun(){ return { t:0, total:0, failed:0, hist:new Float64Array(NB), backlog:0, last:null }; }
+function newRun(){ return { t:0, total:0, failed:0, stale:0, dupes:0, hist:new Float64Array(NB), backlog:0, S:{}, last:null }; }
 function stepRun(run, cfg, sc, dt){
   const lam = trafficAt(sc, run.t), fx = faultsAt(sc, run.t);
-  const e = evaluate(cfg, sc, lam, fx, run.backlog, dt);
-  run.backlog = e.backlog; run.total += lam * dt; run.failed += e.failed * dt;
+  const e = evaluate(cfg, sc, lam, fx, run.backlog, dt, run.S, run.t);
+  run.backlog = e.backlog; run.total += e.total * dt; run.failed += e.failed * dt;
+  run.stale += e.stale * dt; run.dupes += e.dupes * dt;
   for (const [l, n] of e.C) run.hist[bucketOf(l)] += n * dt;
   run.t += dt; run.last = e;
   return e;
@@ -350,15 +496,26 @@ function stepRun(run, cfg, sc, dt){
 function simulateAll(cfg, sc){
   const run = newRun(); const dt = 0.1;
   while (run.t < sc.T - 1e-9) stepRun(run, cfg, sc, dt);
-  return { run, p95: histP(run.hist, 0.95), err: run.total ? run.failed / run.total * 100 : 0, lag: run.last.lag, cost: costOf(cfg) };
+  return {
+    run, p95: histP(run.hist, 0.95), err: run.total ? run.failed / run.total * 100 : 0, lag: run.last.lag, cost: costOf(cfg),
+    stalePct: run.total ? run.stale / run.total * 100 : 0, dupes: run.dupes,
+    lost: run.S.lost || 0, pages: Math.round(run.S.pages || 0), silent: run.S.silent || 0,
+  };
 }
-function judge(res, cfg, goals){
+function judge(res, cfg, goals, sc = {}){
   const checks = [
     { name:'p95 latency', ok: res.p95 <= goals.p95, val: fmtMs(res.p95), goal: '≤ ' + goals.p95 + ' ms' },
-    { name:'Error rate', ok: res.err <= goals.err, val: res.err.toFixed(2) + '%', goal: '≤ ' + goals.err + '%' },
+    { name: sc.bots ? 'Real-user errors' : 'Error rate', ok: res.err <= goals.err, val: res.err.toFixed(2) + '%', goal: '≤ ' + goals.err + '%' },
     { name:'Monthly cost', ok: res.cost <= goals.budget, val: '$' + res.cost.toLocaleString(), goal: isFinite(goals.budget) ? '≤ $' + goals.budget.toLocaleString() : 'no cap' },
   ];
   if (cfg.queue) checks.push({ name:'Queue drained', ok: res.lag <= 10, val: isFinite(res.lag) ? res.lag.toFixed(1) + ' s' : 'never', goal: '≤ 10 s behind' });
+  if (sc.ryw) checks.push({ name:'Stale reads', ok: res.stalePct <= goals.stale, val: res.stalePct.toFixed(2) + '%', goal: '≤ ' + goals.stale + '%' });
+  if (sc.flaky) checks.push({ name:'Double charges', ok: res.dupes < 1, val: Math.round(res.dupes).toLocaleString(), goal: 'none' });
+  if (sc.alerts){
+    checks.push({ name:'Alerts lost', ok: res.lost < 0.5, val: Math.round(res.lost).toLocaleString(), goal: 'none' });
+    checks.push({ name:'Pages sent', ok: res.pages <= goals.pages, val: res.pages.toLocaleString(), goal: '≤ ' + goals.pages });
+    checks.push({ name:'Silent pipeline outage', ok: res.silent < 0.05, val: res.silent.toFixed(0) + ' s', goal: 'none' });
+  }
   const pass = checks.every(c => c.ok);
   let stars = 0;
   if (pass){ stars = 1; if (res.cost <= goals.budget * 0.9) stars = 2; if (stars === 2 && res.p95 <= goals.p95 * 0.6) stars = 3; }
@@ -369,15 +526,46 @@ function fmtMs(v){ return !isFinite(v) ? '∞' : v >= 1000 ? (v / 1000).toFixed(
 
 const COMP = {
   cdn:     { name:'CDN', tag:'CDN', desc:'Edge servers near your users that cache images, JS and CSS. 95% of static requests never reach you.' },
+  limiter: { name:'Rate limiter', tag:'RL', desc:'Counts requests per client at the edge and rejects the excess with HTTP 429 before it costs you anything.' },
   lb:      { name:'Load balancer', tag:'LB', desc:'Spreads requests across every app server and stops sending to ones that die.' },
   app:     { name:'App server', tag:'APP', desc:'Runs your code. About 1,000 req/s each before it saturates.' },
   cache:   { name:'Cache', tag:'KV', desc:'In-memory key–value store (think Redis). A hit costs ~1 ms and skips the database.' },
   db:      { name:'Database', tag:'DB', desc:'Source of truth: 1,500 reads/s and 600 writes/s. More than one means the data is sharded.' },
   replica: { name:'Read replica', tag:'RR', desc:'A copy of the database. Adds 1,500 reads/s and can be promoted if the primary dies.' },
   queue:   { name:'Message queue', tag:'Q', desc:'Accepts writes instantly and holds them until workers catch up.' },
+  partition:{ name:'Topic partition', tag:'P', desc:'Kafka splits a topic into partitions. Each one is read by exactly one worker in the group.' },
   worker:  { name:'Queue worker', tag:'W', desc:'Pulls writes off the queue into the database, 250 per second each.' },
 };
-const ORDER = ['cdn','lb','app','cache','db','replica','queue','worker'];
+const ORDER = ['cdn','limiter','lb','app','cache','db','replica','queue','partition','worker'];
+const SINGLE = ['cdn','limiter','lb','cache','queue'];
+
+// Free design decisions shown under the rack. The first option, or off, is the naive default.
+const POLICY = {
+  algo:      { name:'Limiter algorithm', opts:[['fixed','Fixed window'],['sliding','Sliding window'],['token','Token bucket']],
+               desc:{ fixed:'Counts per clock minute. Clients can double up across each boundary.', sliding:'Weights the previous window so there is no boundary burst.', token:'Allows a short burst, then holds the average rate.' } },
+  key:       { name:'Limit per', opts:[['ip','IP address'],['user','API key']],
+               desc:{ ip:'Everyone behind one office or mobile NAT shares a limit.', user:'Each account gets its own limit, wherever it connects from.' } },
+  coalesce:  { name:'Request coalescing', desc:'One request reloads an expired key; the others wait for its result.' },
+  jitter:    { name:'TTL jitter', desc:'Randomise expiry times so hot keys don’t all expire at once.' },
+  swr:       { name:'Serve stale while refreshing', desc:'Return the old value immediately and refresh it in the background.' },
+  route:     { name:'Read routing', opts:[['any','Any replica'],['session','Primary after a write'],['primary','Primary only']],
+               desc:{ any:'Spread every read across all copies.', session:'A user’s reads go to the primary for a few seconds after they write.', primary:'Every read goes to the primary. Replicas sit idle.' } },
+  shardKey:  { name:'Shard key', opts:[['range','created_at'],['post','hash(post_id)'],['user','hash(user_id)'],['salted','user_id + salt']],
+               desc:{ range:'Rows are split by time ranges. New rows all land on the newest shard.', post:'Posts spread evenly, but a user’s timeline lives on every shard.', user:'A user’s data stays together on one shard, celebrity included.', salted:'Like user_id, but the celebrity is split across shards as user#0…user#9.' } },
+  ring:      { name:'Key → shard mapping', opts:[['mod','hash mod N'],['consistent','Consistent hashing']],
+               desc:{ mod:'Adding a shard changes the home of most keys.', consistent:'Adding a shard moves only about 1/N of the keys.' } },
+  retry:     { name:'When a charge fails', opts:[['none','Give up'],['immediate','Retry at once'],['backoff','Backoff + jitter']],
+               desc:{ none:'The payment fails.', immediate:'Three retries within a second, all hitting the struggling processor.', backoff:'Wait 1 s, 2 s, 4 s, with randomness, so retries spread out.' } },
+  idem:      { name:'Idempotency keys', desc:'Each charge carries a key; the processor ignores a key it has already charged.' },
+  dlq:       { name:'Dead-letter queue', desc:'After three failed tries, park the message for a person to inspect.' },
+  fanout:    { name:'Feed strategy', opts:[['push','Push'],['pull','Pull'],['hybrid','Hybrid']],
+               desc:{ push:'Copy each post into every follower’s feed when it’s posted.', pull:'Build each feed at read time from everyone the user follows.', hybrid:'Push ordinary posts; pull celebrity posts at read time.' } },
+  ack:       { name:'Acknowledge alerts', opts:[['receipt','On receipt'],['durable','After durable write']],
+               desc:{ receipt:'Reply OK as soon as the receiver has the alert in memory.', durable:'Reply OK only after Kafka has stored it on three brokers.' } },
+  dedupe:    { name:'Deduplicate by fingerprint', desc:'A repeat of an open alert updates it instead of paging again.' },
+  correlate: { name:'Correlate into incidents', desc:'Group alerts using the service graph and hold back downstream symptoms.' },
+  watchdog:  { name:'Dead man’s switch', desc:'An external heartbeat pages you if the pipeline itself goes quiet.' },
+};
 
 // Articles in blog/ (generated by tools/build_blog.py).
 const TOPICS = {
@@ -392,6 +580,9 @@ const TOPICS = {
   'rate-limiting':  'Rate limiting',
   availability:     'Availability, redundancy and failover',
   sharding:         'Sharding and consistent hashing',
+  'news-feed':      'News feed and fan-out',
+  notifications:    'Notification service',
+  monitoring:       'Monitoring and alerting systems',
 };
 
 const LEVELS = [
@@ -429,6 +620,30 @@ const LEVELS = [
     terms:[['Hit rate','Share of reads the cache answers. Popular content gives 80–99%.'],['Cache-aside','App reads cache, then DB on a miss, then fills the cache.'],['Replication lag','How far behind a replica is. Causes read-your-own-write bugs.']],
     interview:'When asked to scale reads, mention caching first, then replicas, and name the consistency cost of each.' } },
 
+{ id:'herd', topics:[['caching', "The three standard fixes for a cache stampede, and how to spot hot keys."]], name:'Thundering Herd', short:'Cache stampedes',
+  story:'The recipe site lives on its cache. Twice during the dinner rush the homepage keys expire, and half of all reads miss at the same moment. Every one of them asks the database the same question.',
+  sc:{ rps:6000, read:.95, static:0, far:0, hit:.92, burst:1, ramp:false, T:60, failures:[], stampede:{ at:[18,38], dur:5, share:.5 } },
+  goals:{ p95:250, err:1, budget:850 }, unlock:['lb','app','cache','db','replica'], policies:['coalesce','jitter','swr'], max:{ app:12, db:1, replica:4 }, start:{ lb:1, app:8, db:1, cache:1 },
+  hint:'Two more replicas would absorb the spike, but they cost $200 you don\'t have. The fixes are free: let one request refill the key while the rest wait, spread out the expiry times, or keep serving the old value while it refreshes.',
+  lesson:{ title:'An expiry is an event',
+    body:['A cache that serves 92% of reads lets you run a database sized for 8%. When a hot key expires, every request for it misses at once, and the database briefly sees the traffic it was never sized for. That is a cache stampede, or thundering herd.',
+      'The three standard fixes all stop the herd forming. Request coalescing (a lock, or "single flight") lets one request reload the key while the others wait for it. TTL jitter randomises expiry so related keys don\'t expire together. Serving stale while revalidating returns the old value instantly and refreshes it in the background.',
+      'Hot keys are the same problem in space instead of time: one key so popular that its cache node saturates. Detect them by per-node skew and sampled top-K counts; fix them with a short-lived in-process copy or by replicating the key.'],
+    terms:[['Stampede','Many concurrent misses for the same key hitting the database at once.'],['Coalescing','Collapsing concurrent requests for one key into a single fetch.'],['Stale-while-revalidate','Serve the expired value while one request refreshes it.']],
+    interview:'Whenever you add a cache, say what happens when its hottest key expires, and name the fix.' } },
+
+{ id:'stale', topics:[['replication', "Replication lag, and the read-your-own-writes fix."]], name:'Stale Reads', short:'Replication lag',
+  story:'Users edit their profile, hit save, and see the old version. Your read replicas run a few hundred milliseconds behind the primary, and 15% of reads are people checking something they just changed.',
+  sc:{ rps:5000, read:.9, static:.1, far:0, hit:.8, burst:1, ramp:true, T:60, failures:[], ryw:.15 },
+  goals:{ p95:250, err:1, budget:1000, stale:0.2 }, unlock:['lb','app','db','replica'], policies:['route'], max:{ app:10, db:1, replica:4 }, start:{ lb:1, app:7, db:1, replica:2 },
+  hint:'Sending every read to the primary is always fresh, but the primary only handles 1,500 reads a second. Send just the reads that follow a user\'s own write to the primary, and let the replicas take the rest.',
+  lesson:{ title:'Replicas are a little bit in the past',
+    body:['Asynchronous replicas apply the primary\'s changes a moment later, usually milliseconds, sometimes seconds under load. Most reads don\'t care. The ones that do are a user reading something they just wrote: they expect to see it, and a lagging replica shows them the old value.',
+      'The usual fix is read-your-own-writes consistency: route a user\'s reads to the primary for a short window after they write (or until the replica has caught up to that write\'s log position). Everyone else keeps reading from replicas, so you keep most of the capacity.',
+      'Other lag bugs have similar fixes: pin a user to one replica so their view never goes back in time, and keep causally related writes on the same partition.'],
+    terms:[['Replication lag','How far a replica is behind the primary.'],['Read-your-writes','A user always sees their own latest writes.'],['Monotonic reads','A user never sees older data after newer data.']],
+    interview:'When you add replicas, say which reads can be stale and how you route the ones that can\'t.' } },
+
 { id:'photowall', topics:[['cdn', "Why distance, not server count, sets the latency floor."], ['caching', "Cache-Control and hit rates at the edge."]], name:'Photo Wall', short:'CDN and the edge',
   story:'You launched a photo-sharing feed with readers worldwide. 88% of requests are images and scripts, a quarter of users are an ocean away (+130 ms each way), and the target is a snappy 150 ms.',
   sc:{ rps:8000, read:.9, static:.88, far:.25, hit:.8, burst:1, ramp:true, T:60, failures:[] },
@@ -451,6 +666,41 @@ const LEVELS = [
       'The trade-off is that writes become asynchronous. Your product has to tolerate "processing…" states, and consumers must be idempotent because queues deliver at least once.'],
     terms:[['Backpressure','Signalling upstream to slow down when downstream is full.'],['At-least-once','A message may be delivered twice; handlers must be idempotent.'],['Consumer lag','How far behind the workers are, in messages or seconds.']],
     interview:'Ticketing, checkout and notification systems almost always put a queue (Kafka, SQS, RabbitMQ) between the API and the slow work.' } },
+
+{ id:'bots', topics:[['rate-limiting', "Algorithms, what to key the limit on, and doing it across servers."]], name:'Bot Swarm', short:'Rate limiting',
+  story:'A scraper is hammering your API. 70% of 10,000 req/s comes from a few hundred bot accounts, and a third of your real customers sit behind shared office IPs. Keep real users fast without paying to serve the bots.',
+  sc:{ rps:10000, read:.9, static:0, far:0, hit:.8, burst:1, ramp:false, T:60, failures:[], bots:.7, nat:.3 },
+  goals:{ p95:200, err:1, budget:700 }, unlock:['limiter','lb','app','cache','db'], policies:['algo','key'], max:{ app:12, db:1 }, start:{ lb:1, app:4, db:1, cache:1 },
+  hint:'Limiting by IP also blocks every customer behind a shared office IP, so limit by API key. Then pick an algorithm that doesn\'t let a double burst through at every window boundary.',
+  lesson:{ title:'Say no early and cheaply',
+    body:['A rate limiter rejects excess requests at the edge with HTTP 429, before they use app servers or database capacity. Here it\'s the difference between serving 3,000 real requests a second and paying to serve 10,000.',
+      'What you count per matters as much as how. IP addresses are shared by whole offices and mobile carriers, so an IP limit punishes innocent users. API keys or user IDs identify the actual client.',
+      'A fixed window resets on the clock, so a client can send its full limit just before the boundary and again just after: twice the limit in a moment. Sliding windows and token buckets remove that edge.'],
+    terms:[['429 Too Many Requests','The status for a rate-limited request, ideally with Retry-After.'],['Token bucket','Capacity B refilled at rate R: allows bursts up to B, averages R.'],['Sliding window counter','Weights the previous window\'s count to avoid boundary bursts.']],
+    interview:'Name the key you limit on, the algorithm, where the counters live (Redis plus a Lua script), and whether you fail open or closed.' } },
+
+{ id:'retry', topics:[['queues', "Delivery guarantees, idempotency keys, retries and dead-letter queues."], ['notifications', "Retrying without notifying anyone twice."]], name:'Retry Storm', short:'Retries and idempotency',
+  story:'A payments queue. From 15 s to 45 s the card processor times out on 30% of calls, and some of those timeouts did charge the card. One message in a hundred is malformed and can never succeed. Charge everyone exactly once.',
+  sc:{ rps:2000, read:.5, static:.1, far:0, hit:.8, burst:1, ramp:false, T:60, failures:[], flaky:{ at:15, until:45, p:.3 }, poison:.01 },
+  goals:{ p95:250, err:1, budget:900 }, unlock:['lb','app','cache','db','queue','worker'], policies:['retry','idem','dlq'], max:{ app:6, db:2, worker:8 }, start:{ lb:1, app:3, db:2, cache:1, queue:1, worker:5 },
+  hint:'Retry with backoff so you don\'t pile onto a struggling processor. Add idempotency keys so a retried charge isn\'t charged twice. Park messages that keep failing in a dead-letter queue so they stop eating worker time.',
+  lesson:{ title:'Retries are only safe when they are idempotent',
+    body:['A timeout doesn\'t tell you whether the call failed or succeeded slowly. Retrying is the only way to finish the work, so delivery becomes at-least-once, and without protection a retried payment charges the card twice.',
+      'An idempotency key fixes that: the client sends the same key with every attempt, and the server stores the result for that key and returns it instead of doing the work again. At-least-once delivery plus idempotent processing is what "exactly once" means in practice.',
+      'How you retry matters too. Immediate retries multiply load on a system that is already failing and turn a slowdown into an outage. Exponential backoff with jitter spreads retries out. A message that can never succeed goes to a dead-letter queue after a few tries, or it retries forever and blocks the workers.'],
+    terms:[['At-least-once','Every message is delivered, possibly more than once.'],['Idempotency key','A unique ID per operation, so repeats are recognised and skipped.'],['Dead-letter queue','Where messages go after too many failed attempts.']],
+    interview:'For any payment or notification flow, say what happens on a timeout, how retries back off, and how duplicates are prevented.' } },
+
+{ id:'partitions', topics:[['queues', "Kafka consumer groups: why partitions cap your parallelism."]], name:'Partition Ceiling', short:'Kafka consumer groups',
+  story:'A clickstream topic takes 1,500 events a second. Your consumers fall further behind, and adding more of them changes nothing. The topic was created with 4 partitions.',
+  sc:{ rps:2000, read:.25, static:0, far:0, hit:.8, burst:1, ramp:false, T:60, failures:[], partitions:true },
+  goals:{ p95:250, err:1, budget:1100 }, unlock:['lb','app','db','queue','partition','worker'], policies:[], max:{ app:6, db:4, worker:12, partition:16 }, start:{ lb:1, app:3, db:3, queue:1, partition:4, worker:6 },
+  hint:'Each partition is read by exactly one worker in a consumer group, so with 4 partitions workers 5 and 6 sit idle. Add partitions, and workers to match, until the drain rate beats 1,500 a second.',
+  lesson:{ title:'Partitions are the unit of parallelism',
+    body:['A Kafka topic is split into partitions, and inside one consumer group each partition is assigned to exactly one consumer. That keeps each partition in order, and it caps a group\'s parallelism at the partition count. Extra consumers sit idle.',
+      'So choose the partition count for your peak consumer parallelism, with headroom. Adding partitions later changes which partition each key maps to, which breaks per-key ordering for messages in flight.'],
+    terms:[['Consumer group','Consumers that share a topic\'s partitions between them.'],['Rebalance','Reassigning partitions when consumers join or leave.'],['Consumer lag','How far a group is behind the newest message.']],
+    interview:'When you add Kafka, give the partition key (for ordering) and the partition count (for parallelism).' } },
 
 { id:'nines', topics:[['availability', "N+1 capacity and what happens when each box dies."], ['replication', "How a replica gets promoted when the primary fails."], ['load-balancing', "Health checks that route around a crashed server."]], name:'Four Nines', short:'Redundancy and failover',
   story:'You now run a payments dashboard with a 99.5% success SLO for this test. Chaos engineering is on: an app server will crash, then the database primary will die.',
@@ -476,10 +726,46 @@ const LEVELS = [
     terms:[['Shard key','The column used to pick which shard owns a row.'],['Hot spot','One shard getting far more traffic than the others.'],['Consistent hashing','Maps keys to a ring so adding a node moves only ~1/N of keys.']],
     interview:'Before sharding, show you tried caching, replicas and vertical scaling. Then name your shard key and how you avoid hot spots.' } },
 
+{ id:'celebrity', topics:[['sharding', "Shard keys, hot spots and consistent hashing."], ['news-feed', "Celebrities in a social system."]], name:'Celebrity Shard', short:'Shard keys and resharding',
+  story:'A social app writes 2,500 posts a second across 7 shards. One celebrity accounts for 20% of all activity. At 30 s, data growth forces you to add an eighth shard while traffic keeps flowing.',
+  sc:{ rps:8000, read:.6, static:.2, far:0, hit:.5, burst:1, ramp:false, T:60, failures:[], shard:{ celeb:.2, reshardAt:30, dur:12 } },
+  goals:{ p95:250, err:1, budget:1800 }, unlock:['cdn','lb','app','cache','db'], policies:['shardKey','ring'], max:{ app:12, db:8 }, start:{ cdn:1, lb:1, app:8, cache:1, db:7 },
+  hint:'A time-range key sends every new post to one shard. Hashing post IDs spreads writes, but every timeline read hits every shard. Hash the user ID, salt the celebrity across shards, and use consistent hashing so the new shard takes only a slice of the data.',
+  lesson:{ title:'The shard key is the design',
+    body:['A good shard key spreads load evenly and keeps the data a query needs on one shard. Time ranges fail the first test: all new writes land on the newest shard. Hashing a post ID passes it but fails the second, because a user\'s timeline is spread over every shard and each read becomes a scatter-gather.',
+      'Hashing the user ID passes both until one user is huge. The fix for a celebrity is to split their key into user#0 to user#9, placed on different shards, and merge on read.',
+      'Resharding is where hash mod N hurts: adding one shard changes the home of most keys, and moving that data competes with live traffic. Consistent hashing moves only about 1/N of the keys.'],
+    terms:[['Hot shard','One shard taking far more than its share of load.'],['Scatter-gather','A query sent to every shard, with results merged.'],['Key salting','Splitting one hot key into several sub-keys on different shards.']],
+    interview:'Name your shard key, show which queries stay on one shard, and say how you handle a celebrity and the next reshard.' } },
+
+{ id:'fanout', topics:[['news-feed', "Push vs pull vs hybrid, and the celebrity problem."]], name:'Fan-out', short:'News feed design',
+  story:'Your app serves 3,800 feed loads and 200 new posts a second. The average user has 200 followers and follows 300 accounts. At 25 s, a celebrity with 3 million followers posts.',
+  sc:{ rps:4000, read:.95, static:0, far:0, hit:.99, burst:1, ramp:false, T:60, failures:[], feed:{ F:200, K:300, celebAt:25, C:3e6 } },
+  goals:{ p95:250, err:1, budget:800 }, unlock:['lb','app','cache','db','queue','worker'], policies:['fanout'], max:{ app:8, db:2, worker:6 }, start:{ lb:1, app:5, cache:1, db:1, queue:1, worker:3 },
+  hint:'Push makes feed reads cheap, but a 3M-follower post takes minutes to copy into every feed. Pull makes every feed load query 300 authors. Push ordinary posts, and pull celebrity posts at read time.',
+  lesson:{ title:'Do the work when it is cheapest',
+    body:['Fan-out on write (push) copies each post ID into every follower\'s precomputed feed. Reads become a single cache lookup, which matters because feed loads outnumber posts many times over. It breaks for accounts with millions of followers: one post means millions of writes, and followers see it late.',
+      'Fan-out on read (pull) stores each author\'s posts once and builds the feed when it\'s opened, by merging recent posts from everyone the user follows. Writes are cheap; every read is expensive.',
+      'The hybrid most large feeds use: push for ordinary authors, pull for celebrities above a follower threshold, merged at read time. A celebrity post costs one write plus a hot cache entry that millions of readers share.'],
+    terms:[['Fan-out on write','Precompute feeds when a post is created.'],['Fan-out on read','Assemble feeds when they are opened.'],['Write amplification','One logical write causing many physical ones.']],
+    interview:'Estimate posts, feed reads and followers per user first; the ratio tells you push, pull or hybrid.' } },
+
+{ id:'alertstorm', topics:[['monitoring', "Ingest durability, dedupe, correlation and monitoring the monitor."]], name:'Alert Storm', short:'Designing Vigil',
+  story:'You run the alerting pipeline. At 20 s a database incident makes alert volume jump sixfold for 15 seconds, a receiver crashes in the middle of it, and at 42 s the dedupe workers stall. Lose nothing, page the on-call engineer a handful of times, and never fail silently.',
+  sc:{ rps:2400, read:0, static:0, far:0, hit:0, burst:6, spikes:[[20,35]], ramp:false, T:60, failures:[{ kind:'app', at:27, until:33 },{ kind:'worker', at:42, until:52 }], alerts:true },
+  goals:{ p95:250, err:1, budget:1100, pages:5 }, unlock:['lb','app','db','queue','worker'], policies:['ack','dedupe','correlate','watchdog'], max:{ app:8, db:4, worker:8 }, start:{ lb:1, app:3, db:2, queue:1, worker:4 },
+  hint:'Acknowledge an alert only after it\'s safely in Kafka, so a crashed receiver loses nothing. Deduplicate and correlate so one incident becomes one page. Add a dead man\'s switch so a stalled pipeline pages you instead of going quiet.',
+  lesson:{ title:'The alerting system must work best when everything else is failing',
+    body:['Alert volume spikes exactly when systems are failing, which is also when receivers crash and queues back up. Acknowledging only after a replicated, durable write (with senders retrying until they get that acknowledgement) is what "lose nothing" means.',
+      'A human can act on a few pages, not thousands. Deduplicate by a fingerprint of the alert\'s identifying labels, so repeats update an open alert. Then correlate across the service dependency graph, so a database outage and its six failing callers become one incident.',
+      'Finally, monitor the monitor. A dead man\'s switch is an alert that always fires; an independent service pages you when it stops arriving. A pipeline that fails quietly is worse than one that fails loudly.'],
+    terms:[['Fingerprint','A hash of an alert\'s identifying labels, used as its dedupe key.'],['Inhibition','Suppressing symptom alerts while their cause is firing.'],['Dead man\'s switch','A heartbeat whose absence triggers a page.']],
+    interview:'Walk the ingest path (durable before ack), the dedupe key and window, correlation, retention, and what pages you when the pipeline itself breaks.' } },
+
 { id:'sandbox', topics:[['estimation', "Size a design before you test it."]], name:'Sandbox', short:'Your own scenario', sandbox:true,
   story:'Set your own traffic and turn chaos on or off. Use it to test a design from an interview question, or to see where each component stops helping.',
   sc:{ rps:5000, read:.85, static:.4, far:.1, hit:.8, burst:1, spikes:[[15,25],[40,48]], ramp:true, T:60, failures:[] },
-  goals:{ p95:200, err:1, budget:Infinity }, unlock:ORDER, max:{ app:16, db:8, replica:4, worker:6 }, start:{ lb:1, app:3, db:1 },
+  goals:{ p95:200, err:1, budget:Infinity }, unlock:['cdn','lb','app','cache','db','replica','queue','worker'], max:{ app:16, db:8, replica:4, worker:6 }, start:{ lb:1, app:3, db:1 },
   hint:'Try one change at a time and watch which node turns red first. That node is your bottleneck.',
   lesson:null },
 ];
@@ -499,20 +785,24 @@ let run = null, running = false, preview = null, finished = null;
 const series = { rps:[], p95:[], err:[], lag:[] };
 let logLines = [];
 
-function unlocked(i){ return i === 0 || LEVELS[i].sandbox ? true : (prog.stars[LEVELS[i - 1].id] || 0) > 0; }
+// A level opens when the one before it is cleared, or once you've cleared it yourself (levels were inserted later).
+function unlocked(i){ return i === 0 || LEVELS[i].sandbox || (prog.stars[LEVELS[i].id] || 0) > 0 || (prog.stars[LEVELS[i - 1].id] || 0) > 0; }
 function persist(){ prog.cfgs[LEVELS[li].id] = cfg; store.set({ stars:prog.stars, cfgs:prog.cfgs, level:li }); }
 function blankCfg(){ const c = {}; ORDER.forEach(k => c[k] = 0); return c; }
 
 function loadLevel(i, keepCfg){
   li = i; const L = LEVELS[i];
-  cfg = Object.assign(blankCfg(), keepCfg || prog.cfgs[L.id] || L.start);
+  const src = keepCfg || prog.cfgs[L.id] || L.start;
+  cfg = Object.assign(blankCfg(), src);
   ORDER.forEach(k => { if (!L.unlock.includes(k)) cfg[k] = 0; cfg[k] = Math.min(cfg[k], maxOf(k)); });
+  cfg.p = {};
+  for (const id of L.policies || []) cfg.p[id] = (src.p && id in src.p) ? src.p[id] : POLICY_DEFAULTS[id];
   hintOpen = false; stopRun(); finished = null; logLines = [];
   for (const k in series) series[k] = [];
   document.getElementById('result').hidden = true;
   renderAll(); persist();
 }
-function maxOf(k){ const L = LEVELS[li]; return ['cdn','lb','cache','queue'].includes(k) ? 1 : (L.max[k] ?? (k === 'db' ? 1 : 8)); }
+function maxOf(k){ const L = LEVELS[li]; return SINGLE.includes(k) ? 1 : (L.max[k] ?? (k === 'db' ? 1 : k === 'partition' ? 16 : 8)); }
 
 /* ---------- render: rail, brief, rack ---------- */
 const $ = id => document.getElementById(id);
@@ -536,6 +826,7 @@ function fmtN(n){ return n >= 10000 ? (n / 1000).toFixed(n >= 100000 ? 0 : 1).re
 
 function renderBrief(){
   const L = LEVELS[li], sc = L.sc, g = L.goals;
+  const goals_extra = [];
   const facts = [
     ['Peak', fmtN(sc.rps) + ' req/s'],
     ['Static', Math.round(sc.static * 100) + '%'],
@@ -544,7 +835,17 @@ function renderBrief(){
   if (sc.far) facts.push(['Overseas', Math.round(sc.far * 100) + '% of users']);
   if (sc.burst > 1) facts.push(['Spikes', '×' + sc.burst + ' bursts']);
   if (sc.failures && sc.failures.length) facts.push(['Chaos', sc.failures.length + ' failures']);
-  const goals = [['p95', '≤ ' + g.p95 + ' ms'], ['errors', '≤ ' + g.err + '%']];
+  if (sc.bots) facts.push(['Bots', Math.round(sc.bots * 100) + '% of traffic'], ['Shared IPs', Math.round(sc.nat * 100) + '% of users']);
+  if (sc.stampede) facts.push(['Hot keys expire', sc.stampede.at.map(a => a + ' s').join(', ')]);
+  if (sc.ryw) facts.push(['Read own write', Math.round(sc.ryw * 100) + '% of reads']);
+  if (sc.flaky) facts.push(['Timeouts', Math.round(sc.flaky.p * 100) + '%, ' + sc.flaky.at + '–' + sc.flaky.until + ' s'], ['Poison', Math.round(sc.poison * 100) + '% of messages']);
+  if (sc.partitions) facts.push(['Partitions', 'add them in the rack']);
+  if (sc.shard) facts.push(['Celebrity', Math.round(sc.shard.celeb * 100) + '% of activity'], ['Reshard', 'at ' + sc.shard.reshardAt + ' s']);
+  if (sc.feed) facts.push(['Followers', sc.feed.F + ' avg'], ['Celebrity', fmtN(sc.feed.C) + ' at ' + sc.feed.celebAt + ' s']);
+  if (g.stale != null) goals_extra.push(['stale reads', '≤ ' + g.stale + '%']);
+  if (g.pages != null) goals_extra.push(['pages', '≤ ' + g.pages], ['lost alerts', '0']);
+  if (sc.flaky) goals_extra.push(['double charges', '0']);
+  const goals = [['p95', '≤ ' + g.p95 + ' ms'], [sc.bots ? 'real-user errors' : 'errors', '≤ ' + g.err + '%'], ...goals_extra];
   if (isFinite(g.budget)) goals.push(['budget', '≤ $' + g.budget.toLocaleString() + '/mo']);
   let html = `<div class="label">${L.sandbox ? 'Free play' : 'Level ' + (li + 1) + ' · ' + L.short}</div>
     <h2>${L.name}</h2><p class="story">${L.story}</p>
@@ -592,7 +893,19 @@ function bindSandbox(){
 function renderRack(){
   const L = LEVELS[li], prev = li > 0 ? LEVELS[li - 1].unlock : [];
   const cost = costOf(cfg), b = L.goals.budget;
-  $('rack').innerHTML = '<div class="label">Component rack</div>' + ORDER.map(k => {
+  const pols = L.policies || [];
+  const policyHtml = pols.length ? '<div class="label" style="margin-top:6px">Design decisions · free</div>' + pols.map(id => {
+    const d = POLICY[id], v = cfg.p[id];
+    if (!d.opts) return `<label class="pol tog"><input type="checkbox" id="pol-${id}" data-pol="${id}" ${v ? 'checked' : ''} ${running ? 'disabled' : ''}>
+      <span><b>${d.name}</b><span class="d">${d.desc}</span></span></label>`;
+    return `<div class="pol"><b>${d.name}</b>
+      <div class="seg pseg" role="radiogroup" aria-label="${d.name}">${d.opts.map(([o, label]) =>
+        `<button role="radio" aria-checked="${v === o}" data-pol="${id}" data-v="${o}" ${running ? 'disabled' : ''}>${label}</button>`).join('')}</div>
+      <span class="d">${d.desc[v]}</span></div>`;
+  }).join('') : '';
+  // Limiter and partitions only exist in the levels that teach them.
+  const shown = ORDER.filter(k => !['limiter', 'partition'].includes(k) || L.unlock.includes(k));
+  $('rack').innerHTML = '<div class="label">Component rack</div>' + shown.map(k => {
     const c = COMP[k], on = L.unlock.includes(k), isNew = on && !L.sandbox && li > 0 && !prev.includes(k);
     const mx = maxOf(k);
     return `<div class="comp ${on ? '' : 'locked'}">
@@ -602,16 +915,19 @@ function renderRack(){
       <div class="step"><button data-k="${k}" data-d="-1" aria-label="Remove ${c.name}" ${!on || cfg[k] <= 0 || running ? 'disabled' : ''}>−</button>
       <output>${cfg[k]}</output>
       <button data-k="${k}" data-d="1" aria-label="Add ${c.name}" ${!on || cfg[k] >= mx || running ? 'disabled' : ''}>+</button></div></div>`;
-  }).join('') + `<div class="budget">
+  }).join('') + policyHtml + `<div class="budget">
       <div class="row"><span>Monthly cost</span><b class="mono">$${cost.toLocaleString()}</b></div>
       ${isFinite(b) ? `<div class="bar"><i class="${cost > b ? 'over' : ''}" style="width:${Math.min(100, cost / b * 100)}%"></i></div>
       <div class="row" style="font-size:12px;color:var(--muted)"><span>Budget $${b.toLocaleString()}</span><span>${cost > b ? 'Over by $' + (cost - b) : '$' + (b - cost) + ' left'}</span></div>` : '<div class="row" style="font-size:12px;color:var(--muted)"><span>No budget cap in the sandbox</span></div>'}
     </div>`;
   $('rack').querySelectorAll('.step button').forEach(btn => btn.onclick = () => {
     const k = btn.dataset.k; cfg[k] = Math.max(0, Math.min(maxOf(k), cfg[k] + +btn.dataset.d));
-    finished = null; $('result').hidden = true; persist(); renderRack(); updatePreview();
+    changed();
   });
+  $('rack').querySelectorAll('.pseg button').forEach(btn => btn.onclick = () => { cfg.p[btn.dataset.pol] = btn.dataset.v; changed(); });
+  $('rack').querySelectorAll('input[data-pol]').forEach(inp => inp.onchange = () => { cfg.p[inp.dataset.pol] = inp.checked; changed(); });
 }
+function changed(){ finished = null; $('result').hidden = true; persist(); renderRack(); updatePreview(); }
 
 function renderLesson(force){
   const L = LEVELS[li], box = $('lessonBox');
@@ -645,28 +961,56 @@ function updateTele(e){
     $('tRpsSub').textContent = 'req/s · peak ' + fmtN(LEVELS[li].sc.rps);
     $('tP95').textContent = '—'; $('tP95').className = 'v'; $('tP95Sub').textContent = 'target ≤ ' + g.p95 + ' ms';
     $('tErr').textContent = '—'; $('tErr').className = 'v'; $('tErrSub').textContent = 'target ≤ ' + g.err + '%';
-    $('tLag').textContent = cfg.queue ? '0 s' : 'no queue'; $('tLag').className = 'v'; $('tLagSub').textContent = 'writes waiting';
+    const x = extraMetric(null);
+    $('tLagLabel').textContent = x.label; $('tLag').textContent = x.value; $('tLag').className = 'v'; $('tLagSub').textContent = x.sub;
     drawSparks(); return;
   }
   const p = quantile(e.C, 0.95), er = e.total ? e.failed / e.total * 100 : 0;
-  $('tRps').textContent = fmtN(e.total);
-  $('tRpsSub').textContent = 'req/s · run total ' + fmtN(run.total);
+  $('tRps').textContent = fmtN(e.offered);
+  $('tRpsSub').textContent = LEVELS[li].sc.bots ? fmtN(e.total) + ' from real users' : 'req/s · run total ' + fmtN(run.total);
   $('tP95').textContent = fmtMs(p); $('tP95').className = 'v ' + cls(p, g.p95);
   const cum = run.total ? run.failed / run.total * 100 : 0;
   $('tErr').textContent = er.toFixed(er < 10 ? 2 : 0) + '%'; $('tErr').className = 'v ' + cls(er, g.err);
   $('tErrSub').textContent = 'run so far ' + cum.toFixed(2) + '% · ≤ ' + g.err + '%';
-  if (cfg.queue){
-    $('tLag').textContent = isFinite(e.lag) ? e.lag.toFixed(1) + ' s' : 'stalled'; $('tLag').className = 'v ' + (isFinite(e.lag) ? cls(e.lag, 10) : 'bad');
-    $('tLagSub').textContent = fmtN(e.backlog) + ' writes waiting';
-  } else { $('tLag').textContent = 'no queue'; $('tLag').className = 'v'; }
+  const x = extraMetric(e);
+  $('tLagLabel').textContent = x.label; $('tLag').textContent = x.value; $('tLag').className = 'v ' + (x.cls || ''); $('tLagSub').textContent = x.sub;
   drawSparks();
+}
+
+// The fourth tile shows what the level is about: queue lag by default.
+function extraMetric(e){
+  const L = LEVELS[li], sc = L.sc, g = L.goals;
+  if (sc.ryw){
+    if (!e) return { label:'Stale reads', value:'—', sub:'target ≤ ' + g.stale + '%' };
+    const v = e.total ? e.stale / e.total * 100 : 0, cum = run.total ? run.stale / run.total * 100 : 0;
+    return { label:'Stale reads', value:v.toFixed(2) + '%', cls:cls(v, g.stale), sub:'run so far ' + cum.toFixed(2) + '%', spark:v, max:Math.max(g.stale * 4, 1), goal:g.stale };
+  }
+  if (sc.flaky){
+    if (!e) return { label:'Double charges', value:'0', sub:'target: none' };
+    const n = Math.round(run.dupes);
+    return { label:'Double charges', value:n.toLocaleString(), cls:n ? 'bad' : 'ok', sub:(e.dupes ? Math.round(e.dupes) + '/s now · ' : '') + 'queue ' + (isFinite(e.lag) ? e.lag.toFixed(1) + ' s' : 'stalled'), spark:e.dupes, max:100, goal:null };
+  }
+  if (sc.alerts){
+    if (!e) return { label:'Pages sent', value:'0', sub:'target ≤ ' + g.pages };
+    const pg = Math.round(run.S.pages || 0), lost = Math.round(run.S.lost || 0), quiet = run.S.silent || 0;
+    return { label:'Pages sent', value:pg.toLocaleString(), cls:cls(pg, g.pages), sub:(lost ? lost + ' alerts lost · ' : '') + (quiet ? 'silent ' + quiet.toFixed(0) + ' s' : 'queue ' + (isFinite(e.lag) ? e.lag.toFixed(1) + ' s' : 'stalled')), spark:Math.min(pg, 50), max:20, goal:g.pages };
+  }
+  if (sc.bots){
+    if (!e) return { label:'Bots blocked', value:'—', sub:'by the rate limiter' };
+    const v = e.bots ? e.flow.blocked / e.bots * 100 : 0, fp = e.flow.fp;
+    return { label:'Bots blocked', value:Math.round(v) + '%', cls:v >= 95 ? 'ok' : v >= 80 ? 'warn' : 'bad', sub:fp > 1 ? fmtN(fp) + ' real users/s blocked' : 'no real users blocked', spark:v, max:100, goal:null };
+  }
+  if (!cfg.queue) return { label:'Queue lag', value:'no queue', sub:'writes waiting', spark:0, max:15, goal:10 };
+  if (!e) return { label:'Queue lag', value:'0 s', sub:(sc.feed ? 'feed inserts' : 'writes') + ' waiting' };
+  return { label:'Queue lag', value:isFinite(e.lag) ? e.lag.toFixed(1) + ' s' : 'stalled', cls:isFinite(e.lag) ? cls(e.lag, 10) : 'bad',
+    sub:fmtN(e.backlog) + (sc.feed ? ' feed inserts' : ' writes') + ' waiting', spark:isFinite(e.lag) ? e.lag : 120, max:15, goal:10 };
 }
 function drawSparks(){
   const g = LEVELS[li].goals;
   spark('sRps', series.rps, LEVELS[li].sc.rps * 1.05, null);
   spark('sP95', series.p95, Math.max(g.p95 * 1.6, ...series.p95.map(v => Math.min(v, g.p95 * 4))), g.p95);
   spark('sErr', series.err, Math.max(g.err * 3, ...series.err.map(v => Math.min(v, 100))), g.err);
-  spark('sLag', series.lag, Math.max(15, ...series.lag.map(v => Math.min(v, 120))), 10);
+  spark('sLag', series.lag, Math.max(series.lagMax || 15, ...series.lag.map(v => Math.min(v, 120))), series.lagGoal === undefined ? 10 : series.lagGoal);
 }
 function spark(id, data, max, goal){
   const c = $(id), r = c.getBoundingClientRect(), dpr = devicePixelRatio || 1;
@@ -716,9 +1060,10 @@ function layout(){
   const X = f => 14 + w / 2 + f * (W - 28 - w);
   const g = {};
   g.users = { x: X(0), y: (top + bot) / 2, w, h: 64 };
-  if (cfg.cdn) g.cdn = { x: X(0.15), y: (top + bot) / 2, w, h: 46 };
-  if (cfg.lb) g.lb = { x: X(0.30), y: (top + bot) / 2, w, h: 46 };
-  g.app = stack(cfg.app, X(0.46), top, bot, w, 40);
+  if (cfg.cdn) g.cdn = { x: X(0.12), y: (top + bot) / 2, w, h: 46 };
+  if (cfg.limiter) g.limiter = { x: X(0.23), y: (top + bot) / 2, w, h: 46 };
+  if (cfg.lb) g.lb = { x: X(0.34), y: (top + bot) / 2, w, h: 46 };
+  g.app = stack(cfg.app, X(0.48), top, bot, w, 40);
   const hasLower = cfg.queue || cfg.worker;
   if (cfg.cache) g.cache = { x: X(0.65), y: top + 22, w, h: 40 };
   if (cfg.queue) g.queue = { x: X(0.63), y: bot - 26, w, h: 40 };
@@ -741,7 +1086,7 @@ function wire(a, b){
   for (let i = 1; i < p.length; i++) ctx.lineTo(p[i][0], p[i][1]); ctx.stroke();
 }
 function entry(){ return G.lb ? [G.lb] : (G.app[0] ? [G.app[0]] : []); }
-function front(){ return G.cdn ? [G.users, G.cdn] : [G.users]; }
+function front(){ return [G.users, G.cdn, G.limiter].filter(Boolean); }
 
 function drawWires(){
   ctx.strokeStyle = tok.wire; ctx.lineWidth = 1;
@@ -752,7 +1097,8 @@ function drawWires(){
   else if (G.app[0]) wire(last, G.app[0]);
   const targets = [G.cache, G.queue, ...G.db, ...G.replica].filter(Boolean);
   G.app.forEach(a => targets.forEach(t => wire(a, t)));
-  if (G.queue) G.worker.forEach(w => { wire(G.queue, w); G.db.forEach(d => wire(w, d)); });
+  const sink = LEVELS[li].sc.feed ? [G.cache].filter(Boolean) : G.db;
+  if (G.queue) G.worker.forEach(w => { wire(G.queue, w); sink.forEach(d => wire(w, d)); });
 }
 
 function utilColor(u){ return u >= 0.9 ? tok.bad : u >= 0.72 ? tok.warn : tok.ok; }
@@ -779,8 +1125,9 @@ const pct = u => Math.round(Math.min(u, 9.99) * 100) + '%';
 function drawNodes(e){
   const fx = e ? e.fx : { appDown:false, dbDown:false };
   const sc = LEVELS[li].sc;
-  node(G.users, 'USERS', sc.far ? Math.round(sc.far * 100) + '% far' : fmtN(e ? e.total : sc.rps) + '/s', null);
+  node(G.users, sc.bots ? 'USERS+BOTS' : 'USERS', sc.far ? Math.round(sc.far * 100) + '% far' : fmtN(e ? e.offered : sc.rps) + '/s', null);
   if (G.cdn) node(G.cdn, 'CDN', e ? fmtN(e.flow.cdn) + '/s' : 'edge', null);
+  if (G.limiter) node(G.limiter, 'LIMIT', e ? Math.round(e.util.limiter * 100) + '% 429' : (cfg.p.key === 'user' ? 'per key' : 'per IP'), null);
   if (G.lb) node(G.lb, 'LB', 'L7', null);
   G.app.forEach((a, i) => {
     const down = fx.appDown && i === 0;
@@ -788,11 +1135,17 @@ function drawNodes(e){
     node(a, 'APP' + (G.app.length > 1 ? ' ' + (i + 1) : ''), idle ? 'idle' : e ? pct(e.util.app) : '', idle ? 0 : e ? e.util.app : null, down ? 'down' : '');
   });
   if (G.cache) node(G.cache, 'CACHE', e ? pct(e.util.cache) : '', e ? e.util.cache : null);
-  if (G.queue) node(G.queue, 'QUEUE', e ? fmtN(e.backlog) + ' msg' : '', null);
-  G.worker.forEach((w, i) => node(w, 'W' + (i + 1), '', e ? e.util.worker : null));
+  if (G.queue) node(G.queue, sc.partitions ? 'TOPIC' : 'QUEUE', e ? fmtN(e.backlog) + ' msg' : sc.partitions ? cfg.partition + ' part.' : '', null);
+  const live = e ? e.workersEff : cfg.worker - (sc.partitions ? Math.max(0, cfg.worker - cfg.partition) : 0);
+  G.worker.forEach((w, i) => {
+    const idle = i >= live && !(e && e.workersDown);
+    node(w, 'W' + (i + 1), idle ? 'IDLE' : '', idle ? 0 : e ? e.util.worker : null, e && e.workersDown ? 'down' : '');
+  });
+  const heat = shardHeat(e);
   G.db.forEach((d, i) => {
     const down = fx.dbDown && i === 0;
-    node(d, cfg.db > 1 ? 'SHARD ' + (i + 1) : 'DB', e ? pct(e.util.db) : 'primary', e ? e.util.db : null, down ? 'down' : '');
+    const u = e ? heat[i] : null;
+    node(d, cfg.db > 1 ? 'SHARD ' + (i + 1) : 'DB', e ? pct(u) : 'primary', u, down ? 'down' : '');
   });
   G.replica.forEach((r, i) => {
     const promoted = e && e.promoted && i === 0;
@@ -807,7 +1160,13 @@ function drawNodes(e){
     const flags = [];
     if (fx.appDown) flags.push('APP 1 CRASHED');
     if (fx.dbDown) flags.push(e && e.promoted ? 'FAILED OVER' : 'DB PRIMARY DOWN');
-    if (L.sc.burst > 1 && (L.sc.spikes || []).some(([a, b]) => run.t >= a && run.t < b)) flags.push('SPIKE ×' + L.sc.burst);
+    if (L.sc.burst > 1 && (L.sc.spikes || []).some(([a, b]) => run.t >= a && run.t < b)) flags.push(L.sc.alerts ? 'ALERT STORM ×' + L.sc.burst : 'SPIKE ×' + L.sc.burst);
+    if (fx.stampede) flags.push('HOT KEYS EXPIRED');
+    if (fx.flaky) flags.push('PROCESSOR TIMEOUTS ' + Math.round(L.sc.flaky.p * 100) + '%');
+    if (fx.migrating) flags.push('RESHARDING');
+    if (fx.workerDown) flags.push(e && !e.workersDown ? 'WORKERS RESTARTED' : 'WORKERS STALLED');
+    if (L.sc.bots && cfg.limiter && cfg.p.algo === 'fixed' && (run.t % 10) < 1) flags.push('WINDOW RESET');
+    if (L.sc.feed && run.t >= L.sc.feed.celebAt && run.t < L.sc.feed.celebAt + 4) flags.push('CELEBRITY POSTED');
     if (flags.length){ ctx.fillStyle = tok.bad; ctx.font = `600 11px ${getFontMono()}`; ctx.fillText(flags.join('  ·  '), 150, 22); }
   } else {
     ctx.fillText('PREVIEW AT PEAK LOAD · bars show utilisation', 14, 22);
@@ -816,6 +1175,16 @@ function drawNodes(e){
     ctx.fillStyle = tok.muted; ctx.textAlign = 'center'; ctx.font = `400 13px ${getComputedStyle(document.body).fontFamily}`;
     ctx.fillText(!cfg.app ? 'Add an app server from the rack to start serving requests.' : 'Requests have nowhere to read or write data. Add a database.', W / 2, H - 10);
   }
+}
+
+// Per-shard utilisation, so a hot shard shows red while the others idle.
+function shardHeat(e){
+  const n = cfg.db, out = Array(n).fill(e ? e.util.db : 0);
+  if (!e || !e.sh || n < 2) return out;
+  const key = cfg.p.shardKey, celeb = LEVELS[li].sc.shard.celeb, hot = e.util.db;
+  if (key === 'range'){ out.fill(hot * 0.08); out[n - 1] = hot; }
+  else if (key === 'user'){ const s = celeb + (1 - celeb) / n; out.fill(hot * ((1 - celeb) / n) / s); out[0] = hot; }
+  return out;
 }
 
 /* particles */
@@ -839,34 +1208,48 @@ function makePart(nodes, color, bad){
 }
 function spawn(e, n){
   const f = e.flow;
-  const routes = [['cdn', f.cdn], ['appDrop', f.appDrop], ['static', f.stOk], ['cHit', f.cHit], ['read', f.readOk], ['readBad', f.readBad], ['write', f.writeOk], ['writeBad', f.writeBad], ['enq', f.enq]];
+  const feed = LEVELS[li].sc.feed;
+  const routes = [['cdn', f.cdn], ['blocked', f.blocked], ['fp', f.fp], ['appDrop', f.appDrop], ['static', f.stOk], ['cHit', f.cHit], ['read', f.readOk], ['stale', f.stale], ['readBad', f.readBad],
+    ['write', f.writeOk], ['writeBad', f.writeBad], ['enq', feed ? 0 : f.enq]];
   const tot = routes.reduce((a, r) => a + r[1], 0); if (!tot) return;
   const fx = e.fx;
   const upApps = G.app.filter((_, i) => (cfg.lb ? true : i === 0) && !(fx.appDown && i === 0));
   const upDb = G.db.filter((_, i) => !(fx.dbDown && i === 0 && !e.promoted && e.shards < cfg.db));
   const liveDb = upDb.length ? upDb : G.db;
+  // With a skewed shard key, most particles go to the hot shard.
+  const heat = shardHeat(e), heatSum = heat.reduce((a, b) => a + b, 0);
+  const pickDb = () => {
+    if (!e.sh || !heatSum) return pick(liveDb);
+    let r = Math.random() * heatSum;
+    for (let i = 0; i < G.db.length; i++){ if (r < heat[i]) return G.db[i]; r -= heat[i]; }
+    return G.db[G.db.length - 1];
+  };
   for (let s = 0; s < n; s++){
     let r = Math.random() * tot, kind = routes[0][0];
     for (const [k, w] of routes){ if (r < w){ kind = k; break; } r -= w; }
     const fr = front(); const ent = G.lb ? [G.lb] : [];
     const app = upApps.length ? pick(upApps) : G.app[0];
     if (kind === 'cdn'){ makePart([G.users, G.cdn], tok.ok, false); continue; }
+    if (kind === 'blocked'){ makePart(fr, tok.muted, false); continue; }
+    if (kind === 'fp'){ makePart(fr, tok.bad, true); continue; }
     const head = [...fr, ...ent];
     if (kind === 'appDrop'){ makePart(app ? [...head, app] : head, tok.bad, true); continue; }
     if (!app) continue;
     if (kind === 'static'){ makePart([...head, app], tok.accent, false); continue; }
     if (kind === 'cHit'){ makePart([...head, app, G.cache], tok.ok, false); continue; }
     const readPool = [...liveDb, ...G.replica];
-    if (kind === 'read'){ makePart([...head, app, pick(readPool)], tok.accent, false); continue; }
+    if (kind === 'read'){ makePart([...head, app, e.sh ? pickDb() : pick(readPool)], tok.accent, false); continue; }
+    if (kind === 'stale'){ makePart([...head, app, pick(G.replica.length ? G.replica : readPool)], tok.warn, false); continue; }
     if (kind === 'readBad'){ makePart(readPool.length ? [...head, app, pick(readPool)] : [...head, app], tok.bad, true); continue; }
-    if (kind === 'write'){ makePart([...head, app, pick(liveDb)], tok.write, false); continue; }
+    if (kind === 'write'){ makePart([...head, app, pickDb()], tok.write, false); continue; }
     if (kind === 'writeBad'){ makePart(G.db.length ? [...head, app, pick(G.db)] : [...head, app], tok.bad, true); continue; }
     if (kind === 'enq'){ makePart([...head, app, G.queue], tok.write, false); continue; }
   }
 }
 function spawnDrain(n, e){
-  const live = G.db.filter((_, i) => !(e.fx.dbDown && i === 0 && e.shards < cfg.db));
-  for (let s = 0; s < n; s++) if (G.worker.length && live.length) makePart([G.queue, pick(G.worker), pick(live)], tok.write, false);
+  const sink = LEVELS[li].sc.feed ? [G.cache].filter(Boolean) : G.db.filter((_, i) => !(e.fx.dbDown && i === 0 && e.shards < cfg.db));
+  const busy = G.worker.slice(0, e.workersEff);
+  for (let s = 0; s < n; s++) if (busy.length && sink.length) makePart([G.queue, pick(busy), pick(sink)], tok.write, false);
 }
 function stepParts(dt){
   const v = Math.max(180, W * 0.42);
@@ -905,7 +1288,7 @@ function drawGrid(){
 /* ---------- preview + run ---------- */
 function updatePreview(){
   const L = LEVELS[li];
-  preview = evaluate(cfg, L.sc, L.sc.rps, { appDown:false, dbDown:false, blip:false }, 0, 0.1);
+  preview = evaluate(cfg, L.sc, L.sc.rps, faultsAt({}, 0), 0, 0.1, {}, 5);
   G = layout(); updateTele(running || finished ? run.last : null);
   if (!running && !finished) updateTele(null);
 }
@@ -925,23 +1308,32 @@ let prevFx = {}, lastWarn = {};
 function watchEvents(e){
   const t = run.t, sc = LEVELS[li].sc;
   const spike = sc.burst > 1 && (sc.spikes || []).some(([a, b]) => t >= a && t < b);
-  if (spike && !prevFx.spike) log(t, `Flash sale opens: traffic jumps to ${fmtN(e.total)} req/s.`, 'warn');
+  if (spike && !prevFx.spike) log(t, sc.alerts ? `Database incident: alert volume jumps to ${fmtN(e.offered)} a second.` : `Flash sale opens: traffic jumps to ${fmtN(e.offered)} req/s.`, 'warn');
   if (!spike && prevFx.spike) log(t, 'Spike over. Traffic back to baseline.');
   if (e.fx.appDown && !prevFx.appDown) log(t, cfg.lb ? (cfg.app > 1 ? 'APP 1 crashed. Load balancer health check removed it from rotation.' : 'APP 1 crashed and it was your only app server.') : 'APP 1 crashed. With no load balancer, every user was pointed at it.', 'bad');
   if (!e.fx.appDown && prevFx.appDown) log(t, 'APP 1 restarted and rejoined.', 'ok');
   if (e.fx.dbDown && !prevFx.dbDown) log(t, cfg.replica ? 'Database primary died. Promoting a replica…' : 'Database primary died and there is no replica to take over.', 'bad');
   if (e.promoted && !prevFx.promoted) log(t, 'Replica promoted to primary. Writes flowing again.', 'ok');
   if (!e.fx.dbDown && prevFx.dbDown) log(t, 'Old primary rebuilt and back as a standby.', 'ok');
+  if (e.fx.stampede && !prevFx.stampede) log(t, `Homepage keys expired. ${Math.round(sc.stampede.share * 100)}% of reads ${cfg.p.coalesce || cfg.p.swr ? 'would miss, but ' + (cfg.p.coalesce ? 'one request per key refills it' : 'the stale value keeps serving') : 'miss at once and stampede the database'}.`, cfg.p.coalesce || cfg.p.swr ? 'ok' : 'bad');
+  if (e.fx.flaky && !prevFx.flaky) log(t, `Card processor degraded: ${Math.round(sc.flaky.p * 100)}% of charges time out.`, 'bad');
+  if (!e.fx.flaky && prevFx.flaky) log(t, 'Card processor recovered.', 'ok');
+  if (e.fx.migrating && !prevFx.migrating) log(t, `Adding shard ${cfg.db + 1}: moving ${Math.round((cfg.p.ring === 'consistent' ? 1 / (cfg.db + 1) : cfg.db / (cfg.db + 1)) * 100)}% of the data while serving traffic.`, cfg.p.ring === 'consistent' ? 'warn' : 'bad');
+  if (!e.fx.migrating && prevFx.migrating) log(t, 'Rebalancing finished.', 'ok');
+  if (e.fx.workerDown && !prevFx.workerDown) log(t, cfg.p.watchdog ? 'Dedupe workers stalled. The dead man\'s switch stopped receiving heartbeats and paged you.' : 'Dedupe workers stalled. Nothing alerted: the pipeline is silently down.', cfg.p.watchdog ? 'warn' : 'bad');
+  if (prevFx.workersDown && !e.workersDown && e.fx.workerDown) log(t, 'Workers restarted after the page.', 'ok');
+  if (sc.feed && t >= sc.feed.celebAt && !prevFx.celeb) log(t, cfg.p.fanout === 'push' ? `A celebrity posted: ${fmtN(sc.feed.C)} feed inserts queued.` : `A celebrity posted. ${cfg.p.fanout === 'hybrid' ? 'Their followers pull it at read time.' : 'Nothing to fan out with pull.'}`, cfg.p.fanout === 'push' ? 'bad' : 'ok');
+  if (sc.alerts && e.fx.appDown && !prevFx.appDown && cfg.p.ack === 'receipt') log(t, 'The crashed receiver had acknowledged alerts it never wrote to Kafka. They are gone.', 'bad');
   if (e.util.app > 0.95 && t - lastWarn.app > 12){ log(t, `App tier at ${pct(e.util.app)} of capacity. Requests are queueing or being dropped.`, 'warn'); lastWarn.app = t; }
   if (e.util.db > 0.95 && t - lastWarn.db > 12){ log(t, `Database at ${pct(e.util.db)} of capacity.`, 'warn'); lastWarn.db = t; }
-  prevFx = { ...e.fx, promoted: e.promoted, spike };
+  prevFx = { ...e.fx, promoted: e.promoted, spike, workersDown: e.workersDown, celeb: sc.feed ? t >= sc.feed.celebAt : false };
 }
 
 function finishRun(){
   // Use the same fixed step as simulateAll so the verdict never depends on frame rate.
   const L = LEVELS[li];
   const res = simulateAll(cfg, L.sc);
-  const j = judge(res, cfg, L.goals);
+  const j = judge(res, cfg, L.goals, L.sc);
   stopRun(); finished = { res, j };
   log(L.sc.T, j.pass ? 'Load test passed.' : 'Load test failed.', j.pass ? 'ok' : 'bad');
   if (j.pass && !L.sandbox){
@@ -953,7 +1345,7 @@ function finishRun(){
 
 function diagnose(res){
   const L = LEVELS[li], sc = L.sc, tips = [];
-  const pk = evaluate(cfg, sc, sc.rps, { appDown:false, dbDown:false, blip:false }, 0, 0.1);
+  const pk = evaluate(cfg, sc, sc.rps, faultsAt({}, 0), 0, 0.1, {}, 5);
   if (!cfg.app) return 'Nothing is running your code. Add an app server.';
   if (!cfg.db) return 'Dynamic requests need a database to read and write.';
   if (res.cost > L.goals.budget) tips.push(`You are $${res.cost - L.goals.budget} over budget. Find the component doing the least work per dollar.`);
@@ -965,8 +1357,39 @@ function diagnose(res){
     if (!cfg.lb || cfg.app * CAP.app - CAP.app < sc.rps * (1 - sc.static * (cfg.cdn ? CAP.cdnHit : 0))) tips.push('When one app server dies, the rest must still cover peak load (N+1).');
     if (!cfg.replica) tips.push('With no replica, a dead primary takes every database request down with it.');
   }
-  if (cfg.queue && res.lag > 10) tips.push(cfg.worker ? 'Workers drain slower than orders arrive on average, so the backlog never clears.' : 'Writes are piling up in the queue with no workers to drain it.');
-  return tips.slice(0, 3).join(' ') || 'Close. Look at which node turns amber or red first during the run.';
+  const p = cfg.p;
+  if (sc.bots){
+    if (!cfg.limiter) tips.push('70% of the traffic is bots, and you are paying to serve all of it. Put a rate limiter in front.');
+    else if (p.key === 'ip') tips.push('Limiting by IP blocks every customer behind a shared office IP. Limit by API key instead.');
+    else if (p.algo === 'fixed') tips.push('Every 10 s the fixed window resets and the bots get a double burst through. Try a sliding window or token bucket.');
+  }
+  if (sc.stampede && !p.coalesce && !p.swr && !p.jitter) tips.push('When the hot keys expire, half of all reads hit the database at once. Stop the herd forming rather than buying capacity for it.');
+  if (sc.ryw && res.stalePct > L.goals.stale) tips.push('Users reading their own fresh writes from a lagging replica see old data. Route those reads to the primary.');
+  if (sc.ryw && p.route === 'primary') tips.push('Every read on the primary leaves the replicas idle and the primary overloaded.');
+  if (sc.flaky){
+    if (p.retry === 'none') tips.push('Giving up on a timeout fails 30% of payments during the outage. Retry them.');
+    if (p.retry === 'immediate') tips.push('Instant retries pile onto a struggling processor and all three tries fail together. Back off with jitter.');
+    if (res.dupes >= 1) tips.push(`${Math.round(res.dupes).toLocaleString()} cards were charged twice: some timeouts had succeeded. Add idempotency keys.`);
+    if (!p.dlq && res.lag > 10) tips.push('Malformed messages retry forever and eat more worker time every second. Add a dead-letter queue.');
+  }
+  if (sc.partitions && cfg.worker > cfg.partition) tips.push(`Only ${cfg.partition} of your ${cfg.worker} workers have a partition to read. The rest are idle.`);
+  if (sc.shard){
+    if (p.shardKey === 'range') tips.push('Every new post lands on the newest shard while the others idle.');
+    if (p.shardKey === 'post') tips.push('Hashing post IDs spreads writes, but each timeline read now queries every shard.');
+    if (p.shardKey === 'user') tips.push('The celebrity\'s shard carries 20% of all traffic on its own. Salt their key across shards.');
+    if (p.ring === 'mod' && res.err > L.goals.err) tips.push('With hash mod N, adding a shard moves most of the data at once. Consistent hashing moves about 1/N.');
+  }
+  if (sc.feed){
+    if (p.fanout === 'pull') tips.push('Every feed load queries 300 authors, so the database sees hundreds of times the read traffic.');
+    if (p.fanout === 'push' && res.lag > 10) tips.push('The celebrity post queued 3 million feed inserts. Pull celebrity posts at read time instead.');
+  }
+  if (sc.alerts){
+    if (res.lost >= 0.5) tips.push('The crashed receiver had already said OK to alerts held only in memory. Acknowledge after the durable write.');
+    if (res.pages > L.goals.pages) tips.push(p.dedupe ? 'Dedupe still pages once per distinct alert. Correlate them into one incident.' : 'Every repeat of an alert paged someone. Deduplicate by fingerprint.');
+    if (res.silent > 0) tips.push('The dedupe workers stalled for 10 s and nobody knew. Add a dead man\'s switch.');
+  }
+  if (cfg.queue && res.lag > 10 && !sc.flaky && !sc.feed && !sc.partitions) tips.push(cfg.worker ? 'Workers drain slower than orders arrive on average, so the backlog never clears.' : 'Writes are piling up in the queue with no workers to drain it.');
+  return tips.slice(0, 4).join(' ') || 'Close. Look at which node turns amber or red first during the run.';
 }
 
 function showResult(res, j){
@@ -1011,7 +1434,9 @@ function frame(now){
     sampleAcc += dt;
     if (sampleAcc > 0.05){
       sampleAcc = 0;
-      series.rps.push(e.total); series.p95.push(quantile(e.C, 0.95)); series.err.push(e.total ? e.failed / e.total * 100 : 0); series.lag.push(isFinite(e.lag) ? e.lag : 120);
+      const x = extraMetric(e);
+      series.rps.push(e.offered); series.p95.push(quantile(e.C, 0.95)); series.err.push(e.total ? e.failed / e.total * 100 : 0);
+      series.lag.push(x.spark || 0); series.lagMax = x.max; series.lagGoal = x.goal;
       const keep = 600; for (const k in series) if (series[k].length > keep) series[k].shift();
       updateTele(e);
     }

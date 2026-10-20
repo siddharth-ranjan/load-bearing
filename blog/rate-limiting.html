@@ -19,7 +19,7 @@
   <span class="label">Fundamentals · 09 of 22</span>
   <h1>Rate limiting</h1>
   <p class="dek">Decide how much each client may ask for, and say no early and cheaply when they ask for more.</p>
-  <div class="meta"><span>4 min read</span><span>Used in: <a href="../#flashsale">5 · Flash Sale</a></span></div>
+  <div class="meta"><span>4 min read</span><span>Used in: <a href="../#bots">8 · Bot Swarm</a></span></div>
 </header>
 <article class="wrap">
 
@@ -78,7 +78,7 @@ RateLimit-Remaining: 0
 RateLimit-Reset: 12</div>
 <p>Client libraries should back off with jitter when they see 429. Otherwise every rejected client retries at the same moment and the spike repeats.</p>
 
-<div class="note"><p><strong>In the game:</strong> there's no rate limiter component yet. In <em>Flash Sale</em>, a limiter is the other half of the queue: the queue absorbs real orders, and a per-user limit stops bots from filling that queue. Every request you reject cheaply at the edge is one the app tier and the database never see.</p></div>
+<div class="note"><p><strong>In the game:</strong> in <em>Bot Swarm</em>, 70% of the traffic is bots and a third of real users share office IPs. Limiting by IP blocks those users; limiting by API key doesn't. A fixed window lets the bots double up at every reset, which shows as an error spike every 10 seconds. A sliding window or token bucket removes it.</p></div>
 
 <h2>Interview checklist</h2>
 <ul class="check">
@@ -91,9 +91,9 @@ RateLimit-Reset: 12</div>
 
 <section class="game">
   <span class="label">Practise it</span>
-  <h2>Level 5: Flash Sale</h2>
+  <h2>Level 8: Bot Swarm</h2>
   <p>Put this into practice against live traffic. Your progress in the game is saved in your browser.</p>
-  <a class="cta" href="../#flashsale">Play level 5</a>
+  <a class="cta" href="../#bots">Play level 8</a>
 </section>
 <h2>Further reading</h2>
 <ul>

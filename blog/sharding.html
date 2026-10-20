@@ -19,7 +19,7 @@
   <span class="label">Fundamentals · 11 of 22</span>
   <h1>Sharding and consistent hashing</h1>
   <p class="dek">When one primary can't absorb your writes, split the data so each database owns a slice.</p>
-  <div class="meta"><span>3 min read</span><span>Used in: <a href="../#hypergrowth">7 · Hypergrowth</a></span></div>
+  <div class="meta"><span>3 min read</span><span>Used in: <a href="../#hypergrowth">12 · Hypergrowth</a>, <a href="../#celebrity">13 · Celebrity Shard</a></span></div>
 </header>
 <article class="wrap">
 
@@ -55,7 +55,7 @@
 <li><strong>Re-sharding</strong> is a project. Starting with more logical shards than machines (say 256 logical shards on 8 servers) lets you move whole logical shards later rather than splitting them.</li>
 </ul>
 
-<div class="note"><p><strong>In the game:</strong> each database you add in <em>Hypergrowth</em> is another shard with 600 writes/s of capacity. About 2,500 writes/s at peak means at least five shards, and six keeps write latency comfortable. The CDN and cache keep reads off the shards, so the budget goes on write capacity.</p></div>
+<div class="note"><p><strong>In the game:</strong> each database you add in <em>Hypergrowth</em> is another shard with 600 writes/s of capacity. About 2,500 writes/s at peak means at least five shards, and six keeps write latency comfortable. The CDN and cache keep reads off the shards, so the budget goes on write capacity. <em>Celebrity Shard</em> lets you choose the shard key and the key-to-shard mapping, then adds a shard mid-run: watch one shard turn red with a range or plain user_id key, and the rebalance overload every shard with hash mod N.</p></div>
 
 <h2>Interview checklist</h2>
 <ul class="check">
@@ -68,9 +68,9 @@
 
 <section class="game">
   <span class="label">Practise it</span>
-  <h2>Level 7: Hypergrowth</h2>
+  <h2>Level 13: Celebrity Shard</h2>
   <p>Put this into practice against live traffic. Your progress in the game is saved in your browser.</p>
-  <a class="cta" href="../#hypergrowth">Play level 7</a>
+  <a class="cta" href="../#celebrity">Play level 13</a>
 </section>
 <h2>Further reading</h2>
 <ul>

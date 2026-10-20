@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>CDNs and edge caching | Load/Bearing</title>
+<meta name="description" content="You can&#x27;t make light faster, but you can shorten the distance by serving bytes from a city near each user.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">Topic 05 of 8</span>
+  <h1>CDNs and edge caching</h1>
+  <p class="dek">You can't make light faster, but you can shorten the distance by serving bytes from a city near each user.</p>
+  <div class="meta"><span>2 min read</span><span>Used in: <a href="../index.html#photowall">4 · Photo Wall</a>, <a href="../index.html#hypergrowth">7 · Hypergrowth</a></span></div>
+</header>
+<article class="wrap">
+
+<p>A content delivery network is a fleet of caching servers, called points of presence (PoPs), spread across hundreds of cities. A user's request goes to a nearby PoP. If that PoP has the file, it answers in a few milliseconds. If not, it fetches the file from your <strong>origin</strong> once, stores it, and serves everyone nearby from then on.</p>
+
+<figure><div class="dgw"><svg class="dg" width="620" height="66" viewBox="0 0 620 66" role="img" aria-label="On a hit, the edge answers locally. On a miss, it asks a regional shield cache, and only then the origin."><path d="M120,33.0 C143.0,33.0 143.0,33.0 166,33.0"/><polygon class="head" points="166,29.0 172,33.0 166,37.0"/><path d="M284,33.0 C307.0,33.0 307.0,33.0 330,33.0"/><polygon class="head" points="330,29.0 336,33.0 330,37.0"/><path d="M448,33.0 C471.0,33.0 471.0,33.0 494,33.0"/><polygon class="head" points="494,29.0 500,33.0 494,37.0"/><g class=""><rect x="8" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="64.0" y="30.0" text-anchor="middle">USER</text><text class="sub" x="64.0" y="46.0" text-anchor="middle">Sydney</text></g><g class="hot"><rect x="172" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="30.0" text-anchor="middle">EDGE PoP</text><text class="sub" x="228.0" y="46.0" text-anchor="middle">Sydney · ~10 ms</text></g><g class=""><rect x="336" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="30.0" text-anchor="middle">SHIELD</text><text class="sub" x="392.0" y="46.0" text-anchor="middle">regional</text></g><g class=""><rect x="500" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="556.0" y="30.0" text-anchor="middle">ORIGIN</text><text class="sub" x="556.0" y="46.0" text-anchor="middle">Virginia</text></g></svg></div><figcaption>On a hit, the edge answers locally. On a miss, it asks a regional shield cache, and only then the origin.</figcaption></figure>
+
+<h2>Physics sets the floor</h2>
+<p>Light in optical fibre travels at about 200,000 km per second, roughly two-thirds of its speed in a vacuum. That works out to about <strong>1 ms of round-trip time per 100 km</strong>, before routers and indirect cable paths add more.</p>
+<div class="table"><table><thead><tr><th>Route</th><th>Distance</th><th>Best-case RTT</th><th>Typical RTT</th></tr></thead><tbody><tr><td>New York ↔ London</td><td class="n">5,600 km</td><td class="n">56 ms</td><td class="n">70–80 ms</td></tr><tr><td>San Francisco ↔ Tokyo</td><td class="n">8,300 km</td><td class="n">83 ms</td><td class="n">100–120 ms</td></tr><tr><td>London ↔ Sydney</td><td class="n">17,000 km</td><td class="n">170 ms</td><td class="n">250+ ms</td></tr></tbody></table></div>
+<p>A new HTTPS connection costs several round trips before the first byte arrives (TCP handshake plus TLS handshake). From Sydney to an origin in Virginia that's half a second of waiting, and no amount of server capacity fixes it. Only distance does.</p>
+
+<h2>What CDNs serve</h2>
+<ul>
+<li><strong>Static assets:</strong> images, video, JavaScript, CSS and fonts. These are often 80–95% of requests and most of the bytes.</li>
+<li><strong>Cacheable API responses:</strong> public, rarely changing data such as product catalogues or a public timeline, with short TTLs.</li>
+<li><strong>Dynamic acceleration:</strong> even uncacheable requests get faster. TLS ends at the nearby edge, and the edge keeps warm, pooled connections back to the origin.</li>
+</ul>
+
+<h2>Controlling the cache with headers</h2>
+<div class="math">Cache-Control: public, max-age=31536000, immutable      # hashed assets
+Cache-Control: public, max-age=60, stale-while-revalidate=300   # semi-fresh API
+Cache-Control: private, no-store                               # per-user data</div>
+<ul>
+<li><code>max-age</code> is the browser TTL; <code>s-maxage</code> overrides it for shared caches like CDNs.</li>
+<li><code>stale-while-revalidate</code> serves the old copy instantly while fetching a fresh one in the background.</li>
+<li><code>Vary</code> lists the request headers that change the response. Vary on too much and the hit rate collapses.</li>
+</ul>
+
+<h2>Cache busting beats invalidation</h2>
+<p>Purging a file from hundreds of PoPs is slow and sometimes incomplete. The better pattern is <strong>content-hashed filenames</strong>: <code>app.3f9a1c.js</code> can be cached forever, because a new build produces <code>app.b72e04.js</code> and the HTML points to the new name. Only the HTML needs a short TTL.</p>
+
+<h2>Pull vs push</h2>
+<p>A <strong>pull</strong> CDN fetches from the origin on the first miss. That's the common choice, with no upload step. A <strong>push</strong> CDN has you upload content ahead of time, which suits large, predictable files like video releases. An <strong>origin shield</strong> adds one regional cache layer so that 300 PoPs missing at once send one request to your origin, not 300.</p>
+
+<div class="note"><p><strong>In the game:</strong> the CDN serves 95% of static requests at 14 ms for everyone, including overseas users, who otherwise pay +130 ms on every request. In <em>Photo Wall</em>, 88% of traffic is static, so one CDN does more than nine app servers would.</p></div>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Put static media in object storage (S3, GCS) behind a CDN.</li>
+<li>Use content-hashed filenames with long TTLs, and a short TTL for the HTML.</li>
+<li>Explain what happens on a miss, and add an origin shield for big fan-out.</li>
+<li>Say whether any API responses are cacheable at the edge.</li>
+<li>Remember that dynamic requests still benefit from TLS ending at the edge.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Level 4: Photo Wall</h2>
+  <p>Put this into practice against live traffic. Your progress in the game is saved in your browser.</p>
+  <a class="cta" href="../index.html#photowall">Play level 4</a>
+</section>
+
+<h2>Further reading</h2>
+<ul>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly). The standard book on replication, partitioning and consistency.</li>
+<li><a href="https://sre.google/sre-book/table-of-contents/">Site Reliability Engineering</a>, Google's free book on running reliable systems.</li>
+<li><a href="https://aws.amazon.com/builders-library/">The Amazon Builders' Library</a>: practical articles on timeouts, retries, caching and load shedding.</li>
+<li><a href="https://github.com/donnemartin/system-design-primer">The System Design Primer</a>: a broad, community-maintained overview.</li>
+</ul>
+
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="replication.html"><span class="label">Previous</span><b>Database replication</b></a><a class="next" href="queues.html"><span class="label">Next</span><b>Message queues and backpressure</b></a></nav>
+</main>
+</body>
+</html>

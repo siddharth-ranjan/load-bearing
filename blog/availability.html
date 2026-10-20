@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Availability, redundancy and failover | Load/Bearing</title>
+<meta name="description" content="Every component fails eventually. Design so that one failure costs you capacity, not the whole site.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">Topic 07 of 8</span>
+  <h1>Availability, redundancy and failover</h1>
+  <p class="dek">Every component fails eventually. Design so that one failure costs you capacity, not the whole site.</p>
+  <div class="meta"><span>3 min read</span><span>Used in: <a href="../index.html#nines">6 · Four Nines</a>, <a href="../index.html#frontpage">2 · Front Page</a></span></div>
+</header>
+<article class="wrap">
+
+<p>Availability is the fraction of time, or of requests, that the system works. It's usually written in "nines", and each extra nine cuts the allowed downtime by a factor of ten.</p>
+<div class="table"><table><thead><tr><th>Availability</th><th>Downtime per year</th><th>Per month</th></tr></thead><tbody><tr><td>99% (two nines)</td><td class="n">3.65 days</td><td class="n">7.3 hours</td></tr><tr><td>99.9% (three nines)</td><td class="n">8.77 hours</td><td class="n">43.8 minutes</td></tr><tr><td>99.95%</td><td class="n">4.38 hours</td><td class="n">21.9 minutes</td></tr><tr><td>99.99% (four nines)</td><td class="n">52.6 minutes</td><td class="n">4.4 minutes</td></tr><tr><td>99.999% (five nines)</td><td class="n">5.26 minutes</td><td class="n">26 seconds</td></tr></tbody></table></div>
+<p>At four nines there isn't time for a person to notice, log in and fix anything. Recovery has to be automatic.</p>
+
+<h2>Series and parallel</h2>
+<p>When a request needs several components in a chain, their availabilities multiply, and the chain is weaker than any single link:</p>
+<div class="math">series:   A = A₁ × A₂ × A₃
+          99.9% × 99.9% × 99.9% ≈ 99.7%
+
+parallel: A = 1 − (1 − A₁) × (1 − A₂)
+          two independent 99% servers → 1 − 0.01 × 0.01 = 99.99%</div>
+<p>Redundancy is the parallel formula at work: two mediocre components in parallel beat one excellent one. The catch is the word <em>independent</em>. Two servers in the same rack, on the same power supply, running the same buggy deploy, fail together.</p>
+
+<figure><div class="dgw"><svg class="dg" width="620" height="194" viewBox="0 0 620 194" role="img" aria-label="Redundancy at every tier: spare app servers across zones and a standby database that can be promoted."><path d="M120,97.0 C143.0,97.0 143.0,97.0 166,97.0"/><polygon class="head" points="166,93.0 172,97.0 166,101.0"/><path d="M284,97.0 C307.0,97.0 307.0,33.0 330,33.0"/><polygon class="head" points="330,29.0 336,33.0 330,37.0"/><path d="M284,97.0 C307.0,97.0 307.0,97.0 330,97.0"/><polygon class="head" points="330,93.0 336,97.0 330,101.0"/><path d="M284,97.0 C307.0,97.0 307.0,161.0 330,161.0"/><polygon class="head" points="330,157.0 336,161.0 330,165.0"/><path d="M448,33.0 C471.0,33.0 471.0,65.0 494,65.0"/><polygon class="head" points="494,61.0 500,65.0 494,69.0"/><path d="M448,33.0 C471.0,33.0 471.0,129.0 494,129.0"/><polygon class="head" points="494,125.0 500,129.0 494,133.0"/><path d="M448,97.0 C471.0,97.0 471.0,65.0 494,65.0"/><polygon class="head" points="494,61.0 500,65.0 494,69.0"/><path d="M448,97.0 C471.0,97.0 471.0,129.0 494,129.0"/><polygon class="head" points="494,125.0 500,129.0 494,133.0"/><path d="M448,161.0 C471.0,161.0 471.0,65.0 494,65.0"/><polygon class="head" points="494,61.0 500,65.0 494,69.0"/><path d="M448,161.0 C471.0,161.0 471.0,129.0 494,129.0"/><polygon class="head" points="494,125.0 500,129.0 494,133.0"/><g class=""><rect x="8" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="64.0" y="94.0" text-anchor="middle">USERS</text><text class="sub" x="64.0" y="110.0" text-anchor="middle"></text></g><g class=""><rect x="172" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="94.0" text-anchor="middle">LB</text><text class="sub" x="228.0" y="110.0" text-anchor="middle">pair · health checks</text></g><g class=""><rect x="336" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="30.0" text-anchor="middle">APP 1</text><text class="sub" x="392.0" y="46.0" text-anchor="middle">zone a</text></g><g class=""><rect x="336" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="94.0" text-anchor="middle">APP 2</text><text class="sub" x="392.0" y="110.0" text-anchor="middle">zone b</text></g><g class=""><rect x="336" y="136.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="158.0" text-anchor="middle">APP 3</text><text class="sub" x="392.0" y="174.0" text-anchor="middle">zone c</text></g><g class="hot"><rect x="500" y="40.0" width="112" height="50" rx="5"/><text class="tag" x="556.0" y="62.0" text-anchor="middle">PRIMARY</text><text class="sub" x="556.0" y="78.0" text-anchor="middle">zone a</text></g><g class=""><rect x="500" y="104.0" width="112" height="50" rx="5"/><text class="tag" x="556.0" y="126.0" text-anchor="middle">STANDBY</text><text class="sub" x="556.0" y="142.0" text-anchor="middle">zone b</text></g></svg></div><figcaption>Redundancy at every tier: spare app servers across zones and a standby database that can be promoted.</figcaption></figure>
+
+<h2>Remove single points of failure</h2>
+<p>Go through the diagram box by box and ask: <em>what happens when this one dies?</em></p>
+<ul>
+<li><strong>Stateless tiers:</strong> run N+1 (or N+2) instances behind a load balancer with health checks. Losing one costs capacity, not availability.</li>
+<li><strong>Stateful tiers:</strong> keep a replica or standby that can be promoted. See <a href="replication.html">replication</a>.</li>
+<li><strong>The load balancer, DNS, config and secrets services:</strong> these are easy to forget, and they're single points of failure too.</li>
+<li><strong>The data centre:</strong> spread across availability zones. For the highest targets, spread across regions.</li>
+</ul>
+
+<h2>Active-passive vs active-active</h2>
+<p><strong>Active-passive</strong> keeps a standby idle until it's needed. It's simpler, but failover takes time and the standby might not work when you finally use it. <strong>Active-active</strong> serves traffic from every copy all the time, so you know every copy works, and failure only means redistributing load. You have to keep enough headroom that the survivors can carry the whole load.</p>
+
+<h2>RTO and RPO</h2>
+<p><strong>RTO</strong> (recovery time objective) is how long recovery may take. <strong>RPO</strong> (recovery point objective) is how much data you can afford to lose. A nightly backup gives you an RPO of 24 hours. Async replication gives seconds. Synchronous replication gives zero, at the cost of slower writes.</p>
+
+<h2>Stop failures from spreading</h2>
+<ul>
+<li><strong>Timeouts</strong> on every network call. A call with no timeout ties up a thread forever when the other side hangs.</li>
+<li><strong>Retries with backoff and jitter</strong>, only for idempotent operations, and with a retry budget. Unlimited retries turn a slow service into a dead one.</li>
+<li><strong>Circuit breakers:</strong> after repeated failures, stop calling a dependency for a while and fail fast instead.</li>
+<li><strong>Bulkheads:</strong> separate thread or connection pools per dependency, so one slow dependency can't use them all up.</li>
+<li><strong>Graceful degradation:</strong> if the recommendations service is down, show the page without recommendations.</li>
+</ul>
+
+<h2>Practise failing</h2>
+<p>Failover paths that never run tend to be broken when you need them. <strong>Chaos engineering</strong> kills instances, adds latency and cuts off zones on purpose, in a controlled way, to prove recovery works. That's what the <em>Four Nines</em> level does to your design.</p>
+
+<div class="note"><p><strong>In the game:</strong> APP 1 crashes from 18 s to 34 s and the database primary dies from 38 s to 50 s. To stay under 0.5% errors, the remaining app servers must carry peak traffic (N+1), and a replica must be there to promote.</p></div>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>State an availability target and translate it into downtime.</li>
+<li>Walk every component and say what happens when it fails.</li>
+<li>Run N+1 for stateless tiers and replicas with failover for stateful ones.</li>
+<li>Give RTO and RPO numbers.</li>
+<li>Add timeouts, retries with backoff and circuit breakers so failures don't spread.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Level 6: Four Nines</h2>
+  <p>Put this into practice against live traffic. Your progress in the game is saved in your browser.</p>
+  <a class="cta" href="../index.html#nines">Play level 6</a>
+</section>
+
+<h2>Further reading</h2>
+<ul>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly). The standard book on replication, partitioning and consistency.</li>
+<li><a href="https://sre.google/sre-book/table-of-contents/">Site Reliability Engineering</a>, Google's free book on running reliable systems.</li>
+<li><a href="https://aws.amazon.com/builders-library/">The Amazon Builders' Library</a>: practical articles on timeouts, retries, caching and load shedding.</li>
+<li><a href="https://github.com/donnemartin/system-design-primer">The System Design Primer</a>: a broad, community-maintained overview.</li>
+</ul>
+
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="queues.html"><span class="label">Previous</span><b>Message queues and backpressure</b></a><a class="next" href="sharding.html"><span class="label">Next</span><b>Sharding and consistent hashing</b></a></nav>
+</main>
+</body>
+</html>

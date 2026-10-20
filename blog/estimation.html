@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Back-of-the-envelope estimation | Load/Bearing</title>
+<meta name="description" content="Before you draw a single box, work out how much traffic, data and bandwidth you are designing for.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">Topic 01 of 8</span>
+  <h1>Back-of-the-envelope estimation</h1>
+  <p class="dek">Before you draw a single box, work out how much traffic, data and bandwidth you are designing for.</p>
+  <div class="meta"><span>3 min read</span><span>Used in: <a href="../index.html#hello">1 · Hello, World</a>, <a href="../index.html#frontpage">2 · Front Page</a>, <a href="../index.html#flashsale">5 · Flash Sale</a></span></div>
+</header>
+<article class="wrap">
+
+<p>A design for 100 requests per second and a design for 100,000 requests per second look nothing alike. The first fits on one server. The second needs load balancers, caches, replicas and probably shards. So the first five minutes of any design should go to arithmetic, not architecture.</p>
+<p>You don't need precision. You need the right order of magnitude, so you know whether a component is comfortable, close to its limit, or hopeless.</p>
+
+<h2>From users to requests per second</h2>
+<p>Start from people and work toward machines. The formula almost every estimate uses:</p>
+<div class="math">average RPS = daily active users × actions per user per day ÷ 86,400
+peak RPS    = average RPS × peak factor (usually 2–10×)</div>
+<p>There are 86,400 seconds in a day. Round it to 100,000 and the mental math gets easy: <strong>one million requests a day is about 12 per second</strong>, and one billion a day is about 12,000 per second.</p>
+
+<h3>A worked example</h3>
+<p>Say you're designing a photo feed with 10 million daily users. Each user loads about 20 feed pages and posts 2 photos a day.</p>
+<div class="table"><table><thead><tr><th>Quantity</th><th>Math</th><th>Result</th></tr></thead><tbody><tr><td>Reads per day</td><td>10M × 20</td><td class="n">200M</td></tr><tr><td>Average read RPS</td><td>200M ÷ 86,400</td><td class="n">≈ 2,300/s</td></tr><tr><td>Peak read RPS (×3)</td><td>2,300 × 3</td><td class="n">≈ 7,000/s</td></tr><tr><td>Writes per day</td><td>10M × 2</td><td class="n">20M</td></tr><tr><td>Peak write RPS (×3)</td><td>20M ÷ 86,400 × 3</td><td class="n">≈ 700/s</td></tr></tbody></table></div>
+<p>Two facts fall out straight away. The system is read-heavy (10:1), so caching and read replicas will matter more than write scaling. And 700 writes per second is within reach of one well-tuned database, so you probably don't need sharding on day one.</p>
+
+<h2>Storage and bandwidth</h2>
+<p>The same arithmetic sizes your disks and your network. If each photo record is 1 KB of metadata and the image itself is 500 KB:</p>
+<div class="math">metadata: 20M writes/day × 1 KB   = 20 GB/day   ≈ 7 TB/year
+images:   20M writes/day × 500 KB = 10 TB/day   ≈ 3.6 PB/year
+egress:   7,000 reads/s × 50 KB thumbnail ≈ 350 MB/s ≈ 2.8 Gbit/s</div>
+<p>Now you know the images belong in object storage behind a CDN, not in the database, and that serving them from your own servers would need serious network capacity.</p>
+
+<h2>Numbers worth memorising</h2>
+<p>These are rounded orders of magnitude. Real hardware varies, but the ratios between rows are what matter.</p>
+<div class="table"><table><thead><tr><th>Operation</th><th>Rough time</th></tr></thead><tbody><tr><td>Read from main memory</td><td class="n">100 ns</td></tr><tr><td>Random read from SSD</td><td class="n">~100 µs</td></tr><tr><td>Round trip inside a data centre</td><td class="n">~0.5 ms</td></tr><tr><td>Cache GET over the network (Redis, Memcached)</td><td class="n">~1 ms</td></tr><tr><td>Indexed database query</td><td class="n">1–10 ms</td></tr><tr><td>Round trip, US East ↔ Europe</td><td class="n">~80 ms</td></tr><tr><td>Round trip, US ↔ Australia</td><td class="n">~150–200 ms</td></tr></tbody></table></div>
+<p>Memory is about 1,000 times faster than SSD, and SSD is far faster than going across the planet. That one ratio explains why caches and CDNs exist.</p>
+
+<h2>Capacity of common building blocks</h2>
+<p>Ballpark throughput for one node of each, assuming simple requests:</p>
+<ul>
+<li><strong>Web or app server:</strong> hundreds to a few thousand requests per second, depending on how much work each request does.</li>
+<li><strong>Relational database (PostgreSQL, MySQL):</strong> thousands to tens of thousands of simple indexed queries per second. Writes are more expensive than reads.</li>
+<li><strong>In-memory cache (Redis):</strong> on the order of 100,000 operations per second.</li>
+<li><strong>Message broker partition (Kafka):</strong> tens of megabytes per second.</li>
+</ul>
+
+<h2>Averages lie: think in percentiles</h2>
+<p>If 99 requests take 10 ms and one takes 2 seconds, the average is about 30 ms, which describes nobody's experience. Percentiles describe it better. <strong>p95</strong> is the latency 95% of requests beat, and <strong>p99</strong> is the latency 99% beat. A page that makes 20 backend calls hits the p95 of at least one of them most of the time, so the tail is what users feel.</p>
+
+<h2>Leave headroom</h2>
+<p>Never size a component to run at 100% at peak. Response time climbs steeply as utilisation approaches 1 (see <a href="load-balancing.html">load balancing</a> for the math). A common target is 60–75% at expected peak, which leaves room for spikes and for losing a machine.</p>
+
+<div class="note"><p><strong>In the game:</strong> one app server handles 1,000 req/s and one database handles 1,500 reads/s and 600 writes/s. The level brief gives you peak traffic and the read share, so you can do the same arithmetic before placing anything. In <em>Flash Sale</em>, comparing peak writes (~950/s) with average writes (under 500/s) is the whole puzzle.</p></div>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>State daily active users and actions per user, then derive average and peak RPS.</li>
+<li>Split reads from writes and state the ratio.</li>
+<li>Estimate storage per year and egress bandwidth.</li>
+<li>Name which component the numbers stress first.</li>
+<li>Round aggressively and say you're rounding.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Level 1: Hello, World</h2>
+  <p>Put this into practice against live traffic. Your progress in the game is saved in your browser.</p>
+  <a class="cta" href="../index.html#hello">Play level 1</a>
+</section>
+
+<h2>Further reading</h2>
+<ul>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly). The standard book on replication, partitioning and consistency.</li>
+<li><a href="https://sre.google/sre-book/table-of-contents/">Site Reliability Engineering</a>, Google's free book on running reliable systems.</li>
+<li><a href="https://aws.amazon.com/builders-library/">The Amazon Builders' Library</a>: practical articles on timeouts, retries, caching and load shedding.</li>
+<li><a href="https://github.com/donnemartin/system-design-primer">The System Design Primer</a>: a broad, community-maintained overview.</li>
+</ul>
+
+</article>
+<nav class="pager wrap" aria-label="More topics"><a class="next" href="load-balancing.html"><span class="label">Next</span><b>Load balancing and horizontal scaling</b></a></nav>
+</main>
+</body>
+</html>

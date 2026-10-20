@@ -11,3 +11,4 @@ mkdir -p _site
   cat index.html
   echo '</body></html>'
 } > _site/index.html
+rm -rf _site/blog && cp -r blog _site/blog

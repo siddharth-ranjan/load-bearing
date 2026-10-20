@@ -15,4 +15,6 @@ A browser game for learning system design. Each level is an incident: you add co
 
 Play it at https://load-bearing.siddharthranjan.app (also https://load-bearing-game.vercel.app). Vercel redeploys on every push to `main` using `build.sh`. To run it locally, open `index.html` in a browser; there are no dependencies.
 
+Articles in `blog/` are generated: edit `tools/build_blog.py` and run `python3 tools/build_blog.py`.
+
 The simulation model lives between the `/*SIM-START*/` and `/*SIM-END*/` markers in `index.html`.

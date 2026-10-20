@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Caching | Load/Bearing</title>
+<meta name="description" content="Keep the answers to popular questions in memory so the database only sees the questions nobody asked recently.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">Topic 03 of 8</span>
+  <h1>Caching</h1>
+  <p class="dek">Keep the answers to popular questions in memory so the database only sees the questions nobody asked recently.</p>
+  <div class="meta"><span>3 min read</span><span>Used in: <a href="../index.html#meltdown">3 · Database Meltdown</a>, <a href="../index.html#flashsale">5 · Flash Sale</a>, <a href="../index.html#nines">6 · Four Nines</a>, <a href="../index.html#hypergrowth">7 · Hypergrowth</a></span></div>
+</header>
+<article class="wrap">
+
+<p>Most systems are read-heavy, and most reads ask for the same small set of things: the front page, a popular product, a celebrity's profile. A cache keeps those answers somewhere faster than the database, usually in memory, so a repeat question costs about a millisecond and puts no load on the database.</p>
+
+<h2>Where caches live</h2>
+<p>Caching happens at every layer, from the user's device to the disk:</p>
+<ul>
+<li><strong>Browser cache:</strong> controlled by HTTP headers. It's free and the fastest, but you can't purge it.</li>
+<li><strong>CDN:</strong> shared edge caches near users, mostly for static files. See <a href="cdn.html">CDNs</a>.</li>
+<li><strong>In-process cache:</strong> a map inside each app server. No network hop, but every server has its own copy and they drift apart.</li>
+<li><strong>Distributed cache:</strong> Redis or Memcached, shared by every app server. This is what people usually mean by "add a cache".</li>
+<li><strong>Database buffer pool:</strong> the database caches hot pages in RAM on its own.</li>
+</ul>
+
+<figure><div class="dgw"><svg class="dg" width="292" height="130" viewBox="0 0 292 130" role="img" aria-label="Cache-aside: the app asks the cache first and only queries the database on a miss, then stores the result."><path d="M120,65.0 C143.0,65.0 143.0,33.0 166,33.0"/><polygon class="head" points="166,29.0 172,33.0 166,37.0"/><path d="M120,65.0 C143.0,65.0 143.0,97.0 166,97.0"/><polygon class="head" points="166,93.0 172,97.0 166,101.0"/><g class=""><rect x="8" y="40.0" width="112" height="50" rx="5"/><text class="tag" x="64.0" y="62.0" text-anchor="middle">APP</text><text class="sub" x="64.0" y="78.0" text-anchor="middle">server</text></g><g class="hot"><rect x="172" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="30.0" text-anchor="middle">CACHE</text><text class="sub" x="228.0" y="46.0" text-anchor="middle">~1 ms · hit</text></g><g class=""><rect x="172" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="94.0" text-anchor="middle">DB</text><text class="sub" x="228.0" y="110.0" text-anchor="middle">~10 ms · miss</text></g></svg></div><figcaption>Cache-aside: the app asks the cache first and only queries the database on a miss, then stores the result.</figcaption></figure>
+
+<h2>Read and write patterns</h2>
+<div class="table"><table><thead><tr><th>Pattern</th><th>How it works</th><th>Good for</th></tr></thead><tbody><tr><td><strong>Cache-aside</strong> (lazy loading)</td><td>The app reads the cache. On a miss it reads the DB and writes the result into the cache.</td><td>The default. Only caches what's actually requested.</td></tr><tr><td><strong>Read-through</strong></td><td>The cache library loads from the DB itself on a miss.</td><td>Same as cache-aside, with less app code.</td></tr><tr><td><strong>Write-through</strong></td><td>Every write goes to the cache and the DB together.</td><td>Data that's read right after it's written.</td></tr><tr><td><strong>Write-behind</strong> (write-back)</td><td>Writes go to the cache and are flushed to the DB later.</td><td>Very high write rates, if you accept losing data when the cache dies.</td></tr><tr><td><strong>Write-around</strong></td><td>Writes go straight to the DB. The cache fills on the next read.</td><td>Data written once and rarely read.</td></tr></tbody></table></div>
+
+<h2>Hit rate is everything</h2>
+<p>If <code>h</code> is the hit rate, the share of requests reaching the database is <code>1 − h</code>. That makes the last few percent worth far more than they look:</p>
+<div class="math">hit rate 80% → DB sees 20% of reads
+hit rate 90% → DB sees 10%   (half the load of 80%)
+hit rate 99% → DB sees 1%    (a tenth of the load of 90%)
+
+average latency = h × t_cache + (1 − h) × t_db</div>
+<p>Hit rate rises with cache size, longer TTLs and skewed popularity. Real workloads usually follow a power law, so a cache holding the top 1% of keys can serve most of the traffic.</p>
+
+<h2>Eviction</h2>
+<p>Memory runs out, so something has to go. <strong>LRU</strong> (least recently used) is the common default. <strong>LFU</strong> (least frequently used) protects items that are always popular from a burst of one-off reads. A <strong>TTL</strong> on each key bounds how stale data can get, even if you forget to invalidate it.</p>
+
+<h2>Invalidation, the hard part</h2>
+<p>A cache is a copy, and copies go stale. Common strategies:</p>
+<ul>
+<li><strong>TTL only:</strong> accept data up to N seconds old. Simple and often good enough.</li>
+<li><strong>Delete on write:</strong> after updating the database, delete the cache key so the next read reloads it. Delete rather than update. Updating the cache from two concurrent writers can leave the older value in place.</li>
+<li><strong>Versioned keys:</strong> put a version in the key (<code>user:42:v7</code>), so a change creates a new key and the old one ages out.</li>
+</ul>
+
+<h2>Failure modes to plan for</h2>
+<ul>
+<li><strong>Cache stampede:</strong> a hot key expires and a thousand requests miss at once, all hitting the database. Fix it with request coalescing (one request reloads while the others wait), random jitter on TTLs, or serving stale data while one request refreshes in the background.</li>
+<li><strong>Hot keys:</strong> one key gets so much traffic that its cache node saturates. Replicate it to several nodes or keep a small in-process copy.</li>
+<li><strong>Cold start:</strong> after a restart the hit rate is zero, and a database sized for 10% of reads suddenly sees 100%. Warm caches gradually, or keep enough database capacity to survive a cold cache.</li>
+</ul>
+
+<div class="note"><p><strong>In the game:</strong> each level sets a hit rate (85% in <em>Database Meltdown</em>). Adding the cache multiplies the reads reaching your database by 1 − hit rate. One cache costs less than one read replica and removes far more load, which is why it's the cheaper way through that level.</p></div>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Say what you're caching, where, and with which pattern (usually cache-aside).</li>
+<li>Estimate the hit rate and the database load that's left.</li>
+<li>Choose a TTL and an invalidation strategy.</li>
+<li>Mention stampede protection for hot keys.</li>
+<li>Say what happens if the cache is empty or down.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Level 3: Database Meltdown</h2>
+  <p>Put this into practice against live traffic. Your progress in the game is saved in your browser.</p>
+  <a class="cta" href="../index.html#meltdown">Play level 3</a>
+</section>
+
+<h2>Further reading</h2>
+<ul>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly). The standard book on replication, partitioning and consistency.</li>
+<li><a href="https://sre.google/sre-book/table-of-contents/">Site Reliability Engineering</a>, Google's free book on running reliable systems.</li>
+<li><a href="https://aws.amazon.com/builders-library/">The Amazon Builders' Library</a>: practical articles on timeouts, retries, caching and load shedding.</li>
+<li><a href="https://github.com/donnemartin/system-design-primer">The System Design Primer</a>: a broad, community-maintained overview.</li>
+</ul>
+
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="load-balancing.html"><span class="label">Previous</span><b>Load balancing and horizontal scaling</b></a><a class="next" href="replication.html"><span class="label">Next</span><b>Database replication</b></a></nav>
+</main>
+</body>
+</html>

@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Database replication | Load/Bearing</title>
+<meta name="description" content="Copies of your database give you more read capacity and a standby for when the primary dies. They cost consistency.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">Topic 04 of 8</span>
+  <h1>Database replication</h1>
+  <p class="dek">Copies of your database give you more read capacity and a standby for when the primary dies. They cost consistency.</p>
+  <div class="meta"><span>3 min read</span><span>Used in: <a href="../index.html#meltdown">3 · Database Meltdown</a>, <a href="../index.html#nines">6 · Four Nines</a></span></div>
+</header>
+<article class="wrap">
+
+<p>Replication keeps the same data on several machines. It serves two goals that are easy to mix up: <strong>scaling reads</strong> (more machines can answer queries) and <strong>availability</strong> (if one machine dies, another has the data). It does nothing for write throughput, because every copy has to apply every write.</p>
+
+<figure><div class="dgw"><svg class="dg" width="456" height="130" viewBox="0 0 456 130" role="img" aria-label="Leader–follower replication: writes go to the primary, which streams its changes to read-only replicas."><path d="M120,65.0 C143.0,65.0 143.0,65.0 166,65.0"/><polygon class="head" points="166,61.0 172,65.0 166,69.0"/><path d="M284,65.0 C307.0,65.0 307.0,33.0 330,33.0"/><polygon class="head" points="330,29.0 336,33.0 330,37.0"/><path d="M284,65.0 C307.0,65.0 307.0,97.0 330,97.0"/><polygon class="head" points="330,93.0 336,97.0 330,101.0"/><g class=""><rect x="8" y="40.0" width="112" height="50" rx="5"/><text class="tag" x="64.0" y="62.0" text-anchor="middle">APP</text><text class="sub" x="64.0" y="78.0" text-anchor="middle">reads + writes</text></g><g class="hot"><rect x="172" y="40.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="62.0" text-anchor="middle">PRIMARY</text><text class="sub" x="228.0" y="78.0" text-anchor="middle">all writes</text></g><g class=""><rect x="336" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="30.0" text-anchor="middle">REPLICA 1</text><text class="sub" x="392.0" y="46.0" text-anchor="middle">reads</text></g><g class=""><rect x="336" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="94.0" text-anchor="middle">REPLICA 2</text><text class="sub" x="392.0" y="110.0" text-anchor="middle">reads</text></g></svg></div><figcaption>Leader–follower replication: writes go to the primary, which streams its changes to read-only replicas.</figcaption></figure>
+
+<h2>Leader–follower</h2>
+<p>This is the most common setup (PostgreSQL streaming replication, MySQL replication, and managed services such as RDS and Cloud SQL). One node, the <strong>primary</strong> or leader, accepts writes. It records every change in a log, and the <strong>replicas</strong> (followers) replay that log. The app sends writes to the primary and spreads reads across the replicas.</p>
+
+<h2>Synchronous or asynchronous</h2>
+<div class="table"><table><thead><tr><th>Mode</th><th>The primary confirms a write after…</th><th>Trade-off</th></tr></thead><tbody><tr><td>Asynchronous</td><td>it's written locally</td><td>Fast. A replica can be seconds behind, and failover can lose the last writes.</td></tr><tr><td>Synchronous</td><td>every replica has it</td><td>No data loss, but one slow replica slows every write.</td></tr><tr><td>Semi-synchronous</td><td>at least one replica has it</td><td>The usual compromise: one up-to-date standby, the rest async.</td></tr></tbody></table></div>
+
+<h2>Replication lag and its bugs</h2>
+<p>With async replication, a replica is always a little behind, usually milliseconds and sometimes seconds under load. That causes some classic bugs:</p>
+<ul>
+<li><strong>Not seeing your own write:</strong> a user edits their profile and refreshes. The read goes to a lagging replica and shows the old version. Fix: read from the primary for a short window after a user writes, or pin that user's reads to the primary.</li>
+<li><strong>Going back in time:</strong> two refreshes hit two replicas with different lag, and a comment appears, then disappears. Fix: keep each user on the same replica.</li>
+<li><strong>Effects without causes:</strong> a reader sees a reply before the message it replies to. Fix: keep related writes on one partition, or track causality.</li>
+</ul>
+
+<h2>Failover</h2>
+<p>When the primary dies, a replica has to be promoted:</p>
+<ol>
+<li><strong>Detect</strong> the failure, usually after several missed heartbeats. Too eager and you fail over on a network blip; too slow and the outage lasts longer.</li>
+<li><strong>Choose</strong> the most up-to-date replica.</li>
+<li><strong>Promote</strong> it and point writers at it, through DNS, a proxy or service discovery.</li>
+<li><strong>Fence</strong> the old primary so that if it comes back, it can't accept writes too. Two nodes that both think they're primary is called <strong>split brain</strong>, and it corrupts data.</li>
+</ol>
+<p>Two numbers describe how good your failover is. <strong>RTO</strong> (recovery time objective) is how long writes are unavailable. <strong>RPO</strong> (recovery point objective) is how much recent data you can lose. Async replication has an RPO above zero.</p>
+
+<h2>Beyond one leader</h2>
+<ul>
+<li><strong>Multi-leader:</strong> several nodes, often one per region, accept writes. Writes are fast locally, but concurrent edits conflict and need resolving.</li>
+<li><strong>Leaderless</strong> (Dynamo-style, as in Cassandra): write to W of N replicas and read from R of them. If <code>W + R &gt; N</code>, every read overlaps at least one replica holding the latest write.</li>
+</ul>
+
+<h2>Replicas or a cache?</h2>
+<p>Both reduce load on the primary. A cache is cheaper per read served and faster, but it only helps with repeated reads and needs invalidation. Replicas handle any query, including ad-hoc and analytical ones, and double as failover standbys, but each one costs as much as a database. Many systems use both.</p>
+
+<div class="note"><p><strong>In the game:</strong> each replica adds 1,500 reads/s. In <em>Four Nines</em>, the primary dies at 38 s. With a replica, you lose 2 seconds of writes while it's promoted. Without one, every database request fails for 12 seconds.</p></div>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Say whether replication is there to scale reads, for availability, or both.</li>
+<li>Choose sync, async or semi-sync and state the RPO.</li>
+<li>Handle reading your own writes.</li>
+<li>Describe failover detection, promotion and fencing.</li>
+<li>Remember that replicas don't scale writes.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Level 6: Four Nines</h2>
+  <p>Put this into practice against live traffic. Your progress in the game is saved in your browser.</p>
+  <a class="cta" href="../index.html#nines">Play level 6</a>
+</section>
+
+<h2>Further reading</h2>
+<ul>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly). The standard book on replication, partitioning and consistency.</li>
+<li><a href="https://sre.google/sre-book/table-of-contents/">Site Reliability Engineering</a>, Google's free book on running reliable systems.</li>
+<li><a href="https://aws.amazon.com/builders-library/">The Amazon Builders' Library</a>: practical articles on timeouts, retries, caching and load shedding.</li>
+<li><a href="https://github.com/donnemartin/system-design-primer">The System Design Primer</a>: a broad, community-maintained overview.</li>
+</ul>
+
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="caching.html"><span class="label">Previous</span><b>Caching</b></a><a class="next" href="cdn.html"><span class="label">Next</span><b>CDNs and edge caching</b></a></nav>
+</main>
+</body>
+</html>

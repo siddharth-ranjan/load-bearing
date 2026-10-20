@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Message queues and backpressure | Load/Bearing</title>
+<meta name="description" content="Accept work now, do it at a pace you can sustain, and make sure you eventually catch up.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">Topic 06 of 8</span>
+  <h1>Message queues and backpressure</h1>
+  <p class="dek">Accept work now, do it at a pace you can sustain, and make sure you eventually catch up.</p>
+  <div class="meta"><span>3 min read</span><span>Used in: <a href="../index.html#flashsale">5 · Flash Sale</a></span></div>
+</header>
+<article class="wrap">
+
+<p>In a synchronous design, the user waits while every step runs: validate, charge, write, email. If the slowest step can handle 600 operations a second and 1,000 people click "Buy" at once, 400 of them get errors.</p>
+<p>A message queue splits <em>accepting</em> work from <em>doing</em> it. The API checks the request, puts a message on the queue, and immediately answers "order received". Workers pull messages off the queue and do the slow part at whatever rate the downstream system can handle.</p>
+
+<figure><div class="dgw"><svg class="dg" width="620" height="194" viewBox="0 0 620 194" role="img" aria-label="The queue absorbs bursts. Workers drain it at a steady rate the database can take."><path d="M120,97.0 C143.0,97.0 143.0,97.0 166,97.0"/><polygon class="head" points="166,93.0 172,97.0 166,101.0"/><path d="M284,97.0 C307.0,97.0 307.0,33.0 330,33.0"/><polygon class="head" points="330,29.0 336,33.0 330,37.0"/><path d="M284,97.0 C307.0,97.0 307.0,97.0 330,97.0"/><polygon class="head" points="330,93.0 336,97.0 330,101.0"/><path d="M284,97.0 C307.0,97.0 307.0,161.0 330,161.0"/><polygon class="head" points="330,157.0 336,161.0 330,165.0"/><path d="M448,33.0 C471.0,33.0 471.0,97.0 494,97.0"/><polygon class="head" points="494,93.0 500,97.0 494,101.0"/><path d="M448,97.0 C471.0,97.0 471.0,97.0 494,97.0"/><polygon class="head" points="494,93.0 500,97.0 494,101.0"/><path d="M448,161.0 C471.0,161.0 471.0,97.0 494,97.0"/><polygon class="head" points="494,93.0 500,97.0 494,101.0"/><g class=""><rect x="8" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="64.0" y="94.0" text-anchor="middle">API</text><text class="sub" x="64.0" y="110.0" text-anchor="middle">validate + enqueue</text></g><g class="hot"><rect x="172" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="94.0" text-anchor="middle">QUEUE</text><text class="sub" x="228.0" y="110.0" text-anchor="middle">durable buffer</text></g><g class=""><rect x="336" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="30.0" text-anchor="middle">WORKER 1</text><text class="sub" x="392.0" y="46.0" text-anchor="middle"></text></g><g class=""><rect x="336" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="94.0" text-anchor="middle">WORKER 2</text><text class="sub" x="392.0" y="110.0" text-anchor="middle"></text></g><g class=""><rect x="336" y="136.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="158.0" text-anchor="middle">WORKER 3</text><text class="sub" x="392.0" y="174.0" text-anchor="middle"></text></g><g class=""><rect x="500" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="556.0" y="94.0" text-anchor="middle">DB</text><text class="sub" x="556.0" y="110.0" text-anchor="middle">600 writes/s</text></g></svg></div><figcaption>The queue absorbs bursts. Workers drain it at a steady rate the database can take.</figcaption></figure>
+
+<h2>Load levelling: the math</h2>
+<p>Let λ be the arrival rate and μ the rate your workers can process. During a burst where λ &gt; μ, the backlog grows. Afterwards it shrinks:</p>
+<div class="math">backlog growth during a burst = (λ − μ) × burst duration
+time to drain afterwards       = backlog ÷ (μ − λ_after)</div>
+<p>The rule that matters: <strong>μ must exceed the average arrival rate</strong>, not the peak. If it doesn't, the backlog grows forever and "processed a bit later" turns into "processed tomorrow".</p>
+<h3>Flash sale, worked</h3>
+<p>Writes arrive at 315/s normally and 945/s during an 8-second sale. Two workers process 500/s together.</p>
+<div class="math">backlog after the sale = (945 − 500) × 8 s ≈ 3,560 orders
+drain time afterwards  = 3,560 ÷ (500 − 315) ≈ 19 s</div>
+<p>No errors, and the database never sees more than 500 writes per second. With one worker (250/s), the drain rate is below even the normal 315/s arrival rate, so the backlog never clears.</p>
+
+<h2>Queues vs logs</h2>
+<div class="table"><table><thead><tr><th></th><th>Message queue</th><th>Log / stream</th></tr></thead><tbody><tr><td>Examples</td><td>RabbitMQ, Amazon SQS</td><td>Apache Kafka, Kinesis, Redpanda</td></tr><tr><td>After it's consumed</td><td>The message is deleted</td><td>The message stays for a retention period</td></tr><tr><td>Consumers</td><td>Compete for messages</td><td>Each group reads the whole log at its own pace</td></tr><tr><td>Ordering</td><td>Best effort or FIFO queues</td><td>Ordered within a partition</td></tr><tr><td>Use for</td><td>Task distribution, jobs</td><td>Event streams, fan-out, replay</td></tr></tbody></table></div>
+
+<h2>Delivery guarantees</h2>
+<ul>
+<li><strong>At most once:</strong> fire and forget. Messages can be lost.</li>
+<li><strong>At least once:</strong> the usual default. A worker that crashes before acknowledging gets the message redelivered, so <em>duplicates happen</em>.</li>
+<li><strong>Exactly once:</strong> in practice, at-least-once delivery plus <strong>idempotent</strong> processing. Give each message an id (for example an idempotency key from the client), and have the worker skip ids it has already processed, using a unique constraint in the same transaction as the write.</li>
+</ul>
+
+<h2>When things go wrong</h2>
+<ul>
+<li><strong>Retries with exponential backoff and jitter:</strong> wait 1 s, 2 s, 4 s and so on, with randomness so retries don't arrive in synchronised waves.</li>
+<li><strong>Dead-letter queue:</strong> after N failed attempts, move the message aside for a person to inspect, so one bad message can't block the queue.</li>
+<li><strong>Visibility timeout:</strong> a message being processed is hidden from other workers until it's acknowledged or the timeout expires.</li>
+<li><strong>Backpressure:</strong> when the queue is too deep, slow producers down or reject new work (HTTP 429 or 503) rather than buffering without limit.</li>
+<li><strong>Outbox pattern:</strong> write the business row and an "outbox" row in one database transaction, then publish from the outbox. This avoids "saved but never published" and "published but never saved".</li>
+</ul>
+
+<h2>The product cost</h2>
+<p>Asynchronous work changes what users see. The UI shows "processing", emails arrive a few seconds late, and you need a way to tell the user if something failed after you said "received". That's usually a good trade, but it's a product decision, not only an engineering one.</p>
+
+<div class="note"><p><strong>In the game:</strong> with a queue, writes are acknowledged in about 4 ms whatever the database load. Workers drain 250 writes/s each, capped by database write capacity. The level checks that the queue is less than 10 seconds behind at the end, which fails if workers can't beat the average arrival rate.</p></div>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Say which work becomes asynchronous and what the user sees meanwhile.</li>
+<li>Size workers above the average arrival rate, and the queue for the burst.</li>
+<li>State the delivery guarantee and how processing stays idempotent.</li>
+<li>Cover retries, the dead-letter queue and backpressure.</li>
+<li>Choose a queue or a log and explain why.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Level 5: Flash Sale</h2>
+  <p>Put this into practice against live traffic. Your progress in the game is saved in your browser.</p>
+  <a class="cta" href="../index.html#flashsale">Play level 5</a>
+</section>
+
+<h2>Further reading</h2>
+<ul>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly). The standard book on replication, partitioning and consistency.</li>
+<li><a href="https://sre.google/sre-book/table-of-contents/">Site Reliability Engineering</a>, Google's free book on running reliable systems.</li>
+<li><a href="https://aws.amazon.com/builders-library/">The Amazon Builders' Library</a>: practical articles on timeouts, retries, caching and load shedding.</li>
+<li><a href="https://github.com/donnemartin/system-design-primer">The System Design Primer</a>: a broad, community-maintained overview.</li>
+</ul>
+
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="cdn.html"><span class="label">Previous</span><b>CDNs and edge caching</b></a><a class="next" href="availability.html"><span class="label">Next</span><b>Availability, redundancy and failover</b></a></nav>
+</main>
+</body>
+</html>

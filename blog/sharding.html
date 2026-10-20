@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Sharding and consistent hashing | Load/Bearing</title>
+<meta name="description" content="When one primary can&#x27;t absorb your writes, split the data so each database owns a slice.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">Topic 08 of 8</span>
+  <h1>Sharding and consistent hashing</h1>
+  <p class="dek">When one primary can't absorb your writes, split the data so each database owns a slice.</p>
+  <div class="meta"><span>3 min read</span><span>Used in: <a href="../index.html#hypergrowth">7 · Hypergrowth</a></span></div>
+</header>
+<article class="wrap">
+
+<p>Caches and replicas scale reads. Writes are different: every replica still applies every write, so a single primary is a hard ceiling on write throughput and on how much data fits on one machine. <strong>Sharding</strong> (horizontal partitioning) breaks that ceiling. Each shard is a full, independent database that owns a subset of the rows.</p>
+
+<figure><div class="dgw"><svg class="dg" width="456" height="258" viewBox="0 0 456 258" role="img" aria-label="A router (in the app, a proxy, or the database itself) maps each key to the shard that owns it."><path d="M120,129.0 C143.0,129.0 143.0,129.0 166,129.0"/><polygon class="head" points="166,125.0 172,129.0 166,133.0"/><path d="M284,129.0 C307.0,129.0 307.0,33.0 330,33.0"/><polygon class="head" points="330,29.0 336,33.0 330,37.0"/><path d="M284,129.0 C307.0,129.0 307.0,97.0 330,97.0"/><polygon class="head" points="330,93.0 336,97.0 330,101.0"/><path d="M284,129.0 C307.0,129.0 307.0,161.0 330,161.0"/><polygon class="head" points="330,157.0 336,161.0 330,165.0"/><path d="M284,129.0 C307.0,129.0 307.0,225.0 330,225.0"/><polygon class="head" points="330,221.0 336,225.0 330,229.0"/><g class=""><rect x="8" y="104.0" width="112" height="50" rx="5"/><text class="tag" x="64.0" y="126.0" text-anchor="middle">APP</text><text class="sub" x="64.0" y="142.0" text-anchor="middle"></text></g><g class="hot"><rect x="172" y="104.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="126.0" text-anchor="middle">ROUTER</text><text class="sub" x="228.0" y="142.0" text-anchor="middle">key → shard</text></g><g class=""><rect x="336" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="30.0" text-anchor="middle">SHARD A</text><text class="sub" x="392.0" y="46.0" text-anchor="middle">users 0–3</text></g><g class=""><rect x="336" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="94.0" text-anchor="middle">SHARD B</text><text class="sub" x="392.0" y="110.0" text-anchor="middle">users 4–7</text></g><g class=""><rect x="336" y="136.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="158.0" text-anchor="middle">SHARD C</text><text class="sub" x="392.0" y="174.0" text-anchor="middle">users 8–b</text></g><g class=""><rect x="336" y="200.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="222.0" text-anchor="middle">SHARD D</text><text class="sub" x="392.0" y="238.0" text-anchor="middle">users c–f</text></g></svg></div><figcaption>A router (in the app, a proxy, or the database itself) maps each key to the shard that owns it.</figcaption></figure>
+
+<h2>Try everything else first</h2>
+<p>Sharding is hard to undo and makes every later feature more complicated. Before you shard, check that you have tried indexes and query tuning, a bigger machine, a <a href="caching.html">cache</a>, <a href="replication.html">read replicas</a>, moving old data to cheaper storage, and splitting unrelated tables into separate databases.</p>
+
+<h2>Partitioning strategies</h2>
+<div class="table"><table><thead><tr><th>Strategy</th><th>How</th><th>Strength</th><th>Weakness</th></tr></thead><tbody><tr><td>Range</td><td>Shard A holds ids 1–1M, B holds 1M–2M…</td><td>Range scans stay on one shard</td><td>Hot spots: new ids all land on the last shard</td></tr><tr><td>Hash</td><td>shard = hash(key) mod N</td><td>Even spread</td><td>Range queries hit every shard; changing N moves most keys</td></tr><tr><td>Consistent hash</td><td>Keys and shards placed on a ring</td><td>Adding a shard moves only ~1/N of keys</td><td>More complex routing</td></tr><tr><td>Directory</td><td>A lookup table maps key → shard</td><td>Full control, easy to move tenants</td><td>The directory is another critical service</td></tr></tbody></table></div>
+
+<h2>Choosing the shard key</h2>
+<p>The shard key is the most important decision. A good key:</p>
+<ul>
+<li><strong>Spreads load evenly:</strong> it has many distinct values and no single value dominates.</li>
+<li><strong>Keeps queries local:</strong> the common queries include the key, so they touch one shard. For a social app, <code>user_id</code> keeps a user's posts, likes and settings together.</li>
+<li><strong>Never changes:</strong> moving a row between shards because its key changed is painful.</li>
+</ul>
+<p>Bad keys create <strong>hot spots</strong>. A celebrity's account or a timestamp-based key can send most of the traffic to one shard. Mitigations include splitting a hot key into <code>key#0…key#9</code> (and merging on read), or giving very large tenants their own shards.</p>
+
+<h2>Why mod-N hurts, and consistent hashing</h2>
+<p>With <code>hash(key) mod N</code>, going from 4 to 5 shards changes the shard for about 80% of keys, because a key only stays put if <code>h mod 4 = h mod 5</code>. That's a huge data migration for one new shard.</p>
+<p><strong>Consistent hashing</strong> places both shards and keys on a ring of hash values. Each key belongs to the next shard clockwise. Adding a shard only takes keys from its immediate neighbour, about <code>1/N</code> of the data. Giving each physical shard many <strong>virtual nodes</strong> on the ring smooths out uneven ranges and spreads a failed node's load across all the others. Dynamo, Cassandra and many caches use this approach.</p>
+
+<h2>The costs you take on</h2>
+<ul>
+<li><strong>Cross-shard queries</strong> become scatter-gather: ask every shard and merge the results. They're slower, and as slow as the slowest shard.</li>
+<li><strong>Cross-shard transactions</strong> need two-phase commit (slow, and it blocks if the coordinator fails) or a <strong>saga</strong> (a sequence of local transactions, each with an undo step).</li>
+<li><strong>Unique constraints and auto-increment ids</strong> stop working globally. Use UUIDs, ULIDs or Snowflake-style ids.</li>
+<li><strong>Operations multiply:</strong> backups, migrations and monitoring now cover N databases. Each shard still needs its own replicas for availability.</li>
+<li><strong>Re-sharding</strong> is a project. Starting with more logical shards than machines (say 256 logical shards on 8 servers) lets you move whole logical shards later rather than splitting them.</li>
+</ul>
+
+<div class="note"><p><strong>In the game:</strong> each database you add in <em>Hypergrowth</em> is another shard with 600 writes/s of capacity. About 2,500 writes/s at peak means at least five shards, and six keeps write latency comfortable. The CDN and cache keep reads off the shards, so the budget goes on write capacity.</p></div>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Show that writes or data size have outgrown a single primary.</li>
+<li>Name the shard key and explain why it spreads load and keeps queries local.</li>
+<li>Choose the partitioning strategy (usually hash or consistent hash).</li>
+<li>Handle hot keys and cross-shard queries.</li>
+<li>Plan id generation, per-shard replication and future re-sharding.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Level 7: Hypergrowth</h2>
+  <p>Put this into practice against live traffic. Your progress in the game is saved in your browser.</p>
+  <a class="cta" href="../index.html#hypergrowth">Play level 7</a>
+</section>
+
+<h2>Further reading</h2>
+<ul>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly). The standard book on replication, partitioning and consistency.</li>
+<li><a href="https://sre.google/sre-book/table-of-contents/">Site Reliability Engineering</a>, Google's free book on running reliable systems.</li>
+<li><a href="https://aws.amazon.com/builders-library/">The Amazon Builders' Library</a>: practical articles on timeouts, retries, caching and load shedding.</li>
+<li><a href="https://github.com/donnemartin/system-design-primer">The System Design Primer</a>: a broad, community-maintained overview.</li>
+</ul>
+
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="availability.html"><span class="label">Previous</span><b>Availability, redundancy and failover</b></a></nav>
+</main>
+</body>
+</html>

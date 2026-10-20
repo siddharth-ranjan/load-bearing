@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Load balancing and horizontal scaling | Load/Bearing</title>
+<meta name="description" content="Add machines instead of buying bigger ones, and put something in front that spreads the work and routes around failures.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">Topic 02 of 8</span>
+  <h1>Load balancing and horizontal scaling</h1>
+  <p class="dek">Add machines instead of buying bigger ones, and put something in front that spreads the work and routes around failures.</p>
+  <div class="meta"><span>3 min read</span><span>Used in: <a href="../index.html#frontpage">2 · Front Page</a>, <a href="../index.html#nines">6 · Four Nines</a></span></div>
+</header>
+<article class="wrap">
+
+<p>When one server can't keep up, you have two options. <strong>Vertical scaling</strong> means a bigger machine: more cores, more memory. It's simple and needs no code changes, but it has a ceiling, gets expensive fast, and leaves you with one machine that can take everything down.</p>
+<p><strong>Horizontal scaling</strong> means more machines of the same size. It has no hard ceiling and gives you redundancy for free, but it needs two things: application servers that keep no local state, and a load balancer to spread requests between them.</p>
+
+<figure><div class="dgw"><svg class="dg" width="620" height="194" viewBox="0 0 620 194" role="img" aria-label="A load balancer spreads requests across identical, stateless app servers. Shared state lives in the database."><path d="M120,97.0 C143.0,97.0 143.0,97.0 166,97.0"/><polygon class="head" points="166,93.0 172,97.0 166,101.0"/><path d="M284,97.0 C307.0,97.0 307.0,33.0 330,33.0"/><polygon class="head" points="330,29.0 336,33.0 330,37.0"/><path d="M284,97.0 C307.0,97.0 307.0,97.0 330,97.0"/><polygon class="head" points="330,93.0 336,97.0 330,101.0"/><path d="M284,97.0 C307.0,97.0 307.0,161.0 330,161.0"/><polygon class="head" points="330,157.0 336,161.0 330,165.0"/><path d="M448,33.0 C471.0,33.0 471.0,97.0 494,97.0"/><polygon class="head" points="494,93.0 500,97.0 494,101.0"/><path d="M448,97.0 C471.0,97.0 471.0,97.0 494,97.0"/><polygon class="head" points="494,93.0 500,97.0 494,101.0"/><path d="M448,161.0 C471.0,161.0 471.0,97.0 494,97.0"/><polygon class="head" points="494,93.0 500,97.0 494,101.0"/><g class=""><rect x="8" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="64.0" y="94.0" text-anchor="middle">USERS</text><text class="sub" x="64.0" y="110.0" text-anchor="middle">clients</text></g><g class="hot"><rect x="172" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="94.0" text-anchor="middle">LB</text><text class="sub" x="228.0" y="110.0" text-anchor="middle">health checks</text></g><g class=""><rect x="336" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="30.0" text-anchor="middle">APP 1</text><text class="sub" x="392.0" y="46.0" text-anchor="middle">stateless</text></g><g class=""><rect x="336" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="94.0" text-anchor="middle">APP 2</text><text class="sub" x="392.0" y="110.0" text-anchor="middle">stateless</text></g><g class=""><rect x="336" y="136.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="158.0" text-anchor="middle">APP 3</text><text class="sub" x="392.0" y="174.0" text-anchor="middle">stateless</text></g><g class=""><rect x="500" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="556.0" y="94.0" text-anchor="middle">DB</text><text class="sub" x="556.0" y="110.0" text-anchor="middle">shared state</text></g></svg></div><figcaption>A load balancer spreads requests across identical, stateless app servers. Shared state lives in the database.</figcaption></figure>
+
+<h2>Stateless first</h2>
+<p>A server is stateless when it keeps nothing between requests that another server would need. Sessions go in a shared store (Redis, the database, or a signed cookie), and uploads go to object storage. If any server can answer any request, adding capacity is as simple as starting another copy.</p>
+<p>The alternative, <strong>sticky sessions</strong>, pins each user to one server. It works, but load becomes uneven, and when that server dies its users lose their sessions.</p>
+
+<h2>Layer 4 vs layer 7</h2>
+<div class="table"><table><thead><tr><th></th><th>Layer 4 (transport)</th><th>Layer 7 (application)</th></tr></thead><tbody><tr><td>Sees</td><td>IP addresses and ports</td><td>HTTP method, path, headers, cookies</td></tr><tr><td>Can route by</td><td>Connection</td><td>URL, host, header, user</td></tr><tr><td>Cost</td><td>Very cheap, very fast</td><td>Terminates TLS and parses HTTP</td></tr><tr><td>Examples</td><td>AWS NLB, IPVS</td><td>NGINX, Envoy, HAProxy, AWS ALB</td></tr></tbody></table></div>
+<p>Most web systems use an L7 balancer because it can send <code>/api</code> and <code>/static</code> to different pools, retry idempotent requests, and terminate TLS in one place.</p>
+
+<h2>Choosing a server</h2>
+<ul>
+<li><strong>Round robin:</strong> each server in turn. Fine when requests cost about the same.</li>
+<li><strong>Weighted round robin:</strong> bigger servers get a bigger share.</li>
+<li><strong>Least connections:</strong> pick the server with the fewest requests in flight. Better when request cost varies a lot.</li>
+<li><strong>Power of two choices:</strong> pick two servers at random and send to the less busy one. Nearly as good as least connections and much cheaper to run at scale.</li>
+<li><strong>Hashing (IP or key):</strong> the same client always lands on the same server. Useful for caches, but it rebalances badly unless you use <a href="sharding.html">consistent hashing</a>.</li>
+</ul>
+
+<h2>Health checks</h2>
+<p>The load balancer probes each server, for example with <code>GET /healthz</code> every few seconds, and stops sending traffic after a few failures in a row. This is what turns a crashed server from an outage into a small loss of capacity. Make the check meaningful but cheap. If it calls the database, a slow database can mark every server unhealthy at once.</p>
+
+<h2>Why 95% busy is too busy</h2>
+<p>Requests don't arrive evenly. When a server is busy, new requests wait in line. Basic queueing theory (an M/M/1 queue) gives the average time in the system as:</p>
+<div class="math">response time ≈ service time ÷ (1 − utilisation)</div>
+<div class="table"><table><thead><tr><th>Utilisation</th><th>Response time vs idle</th></tr></thead><tbody><tr><td class="n">50%</td><td class="n">2×</td></tr><tr><td class="n">75%</td><td class="n">4×</td></tr><tr><td class="n">80%</td><td class="n">5×</td></tr><tr><td class="n">90%</td><td class="n">10×</td></tr><tr><td class="n">95%</td><td class="n">20×</td></tr></tbody></table></div>
+<p>A server at 95% is technically keeping up, but every request takes 20 times longer than it would on an idle machine. That's why capacity plans aim for 60–75% at peak. A related rule, <strong>Little's law</strong> (<code>L = λW</code>), says requests in flight equal arrival rate times time in the system. As latency climbs, so do open connections and memory use.</p>
+
+<h2>Don't make the load balancer the new single point of failure</h2>
+<p>Run load balancers in pairs with a floating IP, or use a managed service that is redundant across zones. At global scale, DNS or anycast spreads users across load balancers in several regions.</p>
+
+<h2>Autoscaling</h2>
+<p>Horizontal scaling also lets you add and remove servers automatically, based on CPU, request rate or queue depth. Scale out early and scale in slowly: a new instance takes time to boot and warm up, and scaling in too eagerly makes capacity flap up and down.</p>
+
+<div class="note"><p><strong>In the game:</strong> without a load balancer, only APP 1 gets traffic, however many servers you add. Each app server's latency follows the 1 ÷ (1 − ρ) curve. In <em>Front Page</em>, two servers run at 75% at peak and respond four times slower than idle; three run at 50%. In <em>Four Nines</em>, the health check is what saves you when APP 1 crashes.</p></div>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Say the app tier is stateless and where sessions live.</li>
+<li>Pick L4 or L7 and give a reason.</li>
+<li>Name the balancing algorithm and the health check.</li>
+<li>Size for 60–75% utilisation at peak, plus one spare server (N+1).</li>
+<li>Make the load balancer itself redundant.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Level 2: Front Page</h2>
+  <p>Put this into practice against live traffic. Your progress in the game is saved in your browser.</p>
+  <a class="cta" href="../index.html#frontpage">Play level 2</a>
+</section>
+
+<h2>Further reading</h2>
+<ul>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly). The standard book on replication, partitioning and consistency.</li>
+<li><a href="https://sre.google/sre-book/table-of-contents/">Site Reliability Engineering</a>, Google's free book on running reliable systems.</li>
+<li><a href="https://aws.amazon.com/builders-library/">The Amazon Builders' Library</a>: practical articles on timeouts, retries, caching and load shedding.</li>
+<li><a href="https://github.com/donnemartin/system-design-primer">The System Design Primer</a>: a broad, community-maintained overview.</li>
+</ul>
+
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="estimation.html"><span class="label">Previous</span><b>Back-of-the-envelope estimation</b></a><a class="next" href="caching.html"><span class="label">Next</span><b>Caching</b></a></nav>
+</main>
+</body>
+</html>

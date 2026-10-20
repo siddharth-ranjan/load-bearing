@@ -380,9 +380,11 @@ const TOPICS = {
   'load-balancing': 'Load balancing and horizontal scaling',
   caching:          'Caching',
   indexing:         'Database indexing',
+  'sql-nosql':      'SQL vs NoSQL',
   replication:      'Database replication',
   cdn:              'CDNs and edge caching',
   queues:           'Message queues and backpressure',
+  'rate-limiting':  'Rate limiting',
   availability:     'Availability, redundancy and failover',
   sharding:         'Sharding and consistent hashing',
 };
@@ -433,7 +435,7 @@ const LEVELS = [
     terms:[['Origin','Your own servers, where the CDN fetches a file on a miss.'],['Edge / PoP','A CDN point of presence close to users.'],['Cache-Control','HTTP header that tells browsers and CDNs how long a response stays fresh.']],
     interview:'Any read-heavy media system (Instagram, YouTube, news) starts with "static content goes on a CDN, backed by object storage".' } },
 
-{ id:'flashsale', topics:[['queues', "Size workers for the average, the queue for the burst."], ['estimation', "Compare peak and average write rates before you buy capacity."], ['caching', "Keep reads off the one database you have."]], name:'Flash Sale', short:'Queues and backpressure',
+{ id:'flashsale', topics:[['queues', "Size workers for the average, the queue for the burst."], ['estimation', "Compare peak and average write rates before you buy capacity."], ['caching', "Keep reads off the one database you have."], ['rate-limiting', "Turn bots away at the door so real orders get through."]], name:'Flash Sale', short:'Queues and backpressure',
   story:'A shop runs two 8-second flash sales. Traffic triples from 1,000 to 3,000 req/s and 35% of it is orders. One database accepts 600 writes per second, and you only get one database here.',
   sc:{ rps:3000, read:.65, static:.1, far:0, hit:.7, burst:3, spikes:[[12,20],[34,42]], ramp:false, T:60, failures:[] },
   goals:{ p95:250, err:1, budget:700 }, unlock:['lb','app','cache','db','replica','queue','worker'], max:{ app:8, db:1, replica:3, worker:6 }, start:{ lb:1, app:2, db:1 },
@@ -457,7 +459,7 @@ const LEVELS = [
     terms:[['SPOF','Single point of failure: one box whose loss takes the system down.'],['N+1','Capacity for peak load plus one spare unit.'],['Failover','Promoting a standby to take over from a failed primary.']],
     interview:'For each component, ask "what happens when this dies?" Interviewers want health checks, replicas across zones and an RTO/RPO number.' } },
 
-{ id:'hypergrowth', topics:[['sharding', "Split writes across primaries and choose a shard key."], ['caching', "Keep reads off the shards."], ['cdn', "Take static traffic off the origin entirely."]], name:'Hypergrowth', short:'Sharding',
+{ id:'hypergrowth', topics:[['sharding', "Split writes across primaries and choose a shard key."], ['caching', "Keep reads off the shards."], ['cdn', "Take static traffic off the origin entirely."], ['sql-nosql', "When a database that partitions itself beats sharding Postgres by hand."]], name:'Hypergrowth', short:'Sharding',
   story:'A social app at 12,000 req/s, and 30% of the dynamic traffic is writes: posts, likes, follows. That is over 2,500 writes per second. No cache or replica can help with writes; you need more primaries.',
   sc:{ rps:12000, read:.7, static:.3, far:0, hit:.8, burst:1, ramp:true, T:60, failures:[] },
   goals:{ p95:200, err:1, budget:2000 }, unlock:['cdn','lb','app','cache','db','replica','queue','worker'], max:{ app:16, db:8, replica:4, worker:6 }, start:{ lb:1, app:4, db:1, cache:1 },

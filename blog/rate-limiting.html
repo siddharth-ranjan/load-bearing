@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Rate limiting | Load/Bearing</title>
+<meta name="description" content="Decide how much each client may ask for, and say no early and cheaply when they ask for more.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">Topic 09 of 11</span>
+  <h1>Rate limiting</h1>
+  <p class="dek">Decide how much each client may ask for, and say no early and cheaply when they ask for more.</p>
+  <div class="meta"><span>4 min read</span><span>Used in: <a href="../index.html#flashsale">5 · Flash Sale</a></span></div>
+</header>
+<article class="wrap">
+
+<p>A rate limiter caps how many requests a client can make in a period of time. It protects you from abuse (scrapers, credential stuffing, a buggy client stuck in a retry loop), keeps one tenant from starving the others, and controls costs when each request calls something expensive. It's also <strong>load shedding</strong>: turning away excess work cheaply at the door instead of letting it overload the database.</p>
+<p>A rejected request gets <code>HTTP 429 Too Many Requests</code>, ideally with a <code>Retry-After</code> header so well-behaved clients know when to come back.</p>
+
+<h2>Where it runs and what it counts</h2>
+<ul>
+<li><strong>At the edge or API gateway</strong> (NGINX, Envoy, a CDN, a managed gateway): cheapest, and it stops abuse before it reaches your servers.</li>
+<li><strong>In the service</strong>: needed when the limit depends on business data, such as a plan tier or how many orders a user has placed today.</li>
+<li><strong>The key</strong> is what you count per: API key or user ID for logged-in traffic, IP address for anonymous traffic (careful: many users can share one IP behind a NAT), or a combination. Real systems layer several limits, for example 10 per second <em>and</em> 1,000 per hour per user, plus a global cap.</li>
+</ul>
+
+<h2>The algorithms</h2>
+<div class="table"><table><thead><tr><th>Algorithm</th><th>How it works</th><th>Memory per key</th><th>Trade-off</th></tr></thead><tbody><tr><td>Fixed window</td><td>Count requests per clock window (e.g. per minute). Reset at the boundary.</td><td>1 counter</td><td>Simple, but allows 2× the limit across a boundary: 100 at 0:59 and 100 at 1:00.</td></tr><tr><td>Sliding window log</td><td>Store a timestamp per request. Count those in the last N seconds.</td><td>1 entry per request</td><td>Exact, but memory grows with traffic.</td></tr><tr><td>Sliding window counter</td><td>Weight the previous window's count by how much of it still overlaps.</td><td>2 counters</td><td>Close to exact, very cheap. A common production choice.</td></tr><tr><td>Token bucket</td><td>A bucket holds up to B tokens and refills at R per second. Each request spends one.</td><td>tokens + timestamp</td><td>Allows bursts up to B while holding the average to R.</td></tr><tr><td>Leaky bucket</td><td>Requests join a queue that drains at a fixed rate R.</td><td>a queue</td><td>Perfectly smooth output, but bursts wait or get dropped.</td></tr></tbody></table></div>
+
+<h3>Sliding window counter</h3>
+<div class="math">limit = 100/min, we are 15 s into the current minute
+previous minute: 80 requests, current minute so far: 30
+estimate = 30 + 80 × (45 / 60) = 90  → allow (90 &lt; 100)</div>
+
+<h3>Token bucket</h3>
+<p>A token bucket answers "how big a burst is acceptable?" separately from "what's the long-run rate?". You don't need a timer to add tokens. Store the token count and the time of the last update, and top it up lazily on each request:</p>
+<div class="math">def allow(bucket, now):
+    bucket.tokens = min(B, bucket.tokens + (now - bucket.last) * R)
+    bucket.last = now
+    if bucket.tokens &gt;= 1:
+        bucket.tokens -= 1
+        return True
+    return False</div>
+<p>With B = 20 and R = 5 per second, a client can fire 20 requests at once, then gets 5 per second after that. In a multi-threaded server, wrap the read-modify-write in a lock per bucket, or use an atomic compare-and-swap.</p>
+<p><strong>Token vs leaky bucket:</strong> a token bucket lets bursts through immediately if tokens are saved up. A leaky bucket used as a queue smooths every burst into a steady stream, which suits protecting a downstream system that can only take a fixed rate.</p>
+
+<h2>Per-user limits without unbounded memory</h2>
+<p>One bucket per user, kept forever, grows without limit as new users and IPs appear. Two fixes:</p>
+<ul>
+<li><strong>Evict idle buckets.</strong> A bucket untouched for longer than B ÷ R seconds would be full anyway, so deleting it loses nothing: a new full bucket behaves the same. Keep buckets in an LRU map with a size cap, or set a TTL.</li>
+<li><strong>Store them in Redis with a TTL</strong>, so expiry is automatic.</li>
+</ul>
+
+<h2>Distributed rate limiting</h2>
+<p>With N app servers behind a load balancer, a counter in each server's memory lets a client get N times the limit. The options:</p>
+<ul>
+<li><strong>Divide the limit by N per server.</strong> No coordination, but it's only accurate if the load balancer spreads each client evenly, and it changes whenever N does.</li>
+<li><strong>A shared store, usually Redis.</strong> Every server checks the same counter. For a fixed window, <code>INCR key</code> followed by <code>EXPIRE key 60</code> on the first increment is enough. For a token bucket, the read-modify-write must be atomic, so run it as a <strong>Lua script</strong> inside Redis. A plain GET then SET from two servers at once lets both through.</li>
+<li><strong>Sliding log in Redis</strong> with a sorted set: <code>ZREMRANGEBYSCORE</code> to drop old entries, <code>ZADD</code> the new one, <code>ZCARD</code> to count, all in one transaction.</li>
+<li><strong>Local counters synced periodically</strong>: each server counts locally and pushes to the shared store every few hundred milliseconds. It's slightly inaccurate, but it removes a network hop from every request.</li>
+</ul>
+<p>Decide what happens when Redis is down. <strong>Fail open</strong> (allow everything) keeps the product working but drops protection. <strong>Fail closed</strong> (reject everything) is safer for expensive or security-sensitive endpoints such as login. Many systems fail open with a local in-memory limiter as a backstop.</p>
+
+<h2>Telling clients</h2>
+<div class="math">HTTP/1.1 429 Too Many Requests
+Retry-After: 12
+RateLimit-Limit: 100
+RateLimit-Remaining: 0
+RateLimit-Reset: 12</div>
+<p>Client libraries should back off with jitter when they see 429. Otherwise every rejected client retries at the same moment and the spike repeats.</p>
+
+<div class="note"><p><strong>In the game:</strong> there's no rate limiter component yet. In <em>Flash Sale</em>, a limiter is the other half of the queue: the queue absorbs real orders, and a per-user limit stops bots from filling that queue. Every request you reject cheaply at the edge is one the app tier and the database never see.</p></div>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Say what you're protecting, the key you limit on, and the limits.</li>
+<li>Pick an algorithm and give a reason: token bucket for bursts, sliding window counter for cheap accuracy.</li>
+<li>Share counters across servers with atomic operations (Redis plus Lua).</li>
+<li>Bound memory with TTLs or eviction.</li>
+<li>Choose fail-open or fail-closed, and return 429 with <code>Retry-After</code>.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Level 5: Flash Sale</h2>
+  <p>Put this into practice against live traffic. Your progress in the game is saved in your browser.</p>
+  <a class="cta" href="../index.html#flashsale">Play level 5</a>
+</section>
+
+<h2>Further reading</h2>
+<ul>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly). The standard book on replication, partitioning and consistency.</li>
+<li><a href="https://sre.google/sre-book/table-of-contents/">Site Reliability Engineering</a>, Google's free book on running reliable systems.</li>
+<li><a href="https://aws.amazon.com/builders-library/">The Amazon Builders' Library</a>: practical articles on timeouts, retries, caching and load shedding.</li>
+<li><a href="https://github.com/donnemartin/system-design-primer">The System Design Primer</a>: a broad, community-maintained overview.</li>
+</ul>
+
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="queues.html"><span class="label">Previous</span><b>Message queues and backpressure</b></a><a class="next" href="availability.html"><span class="label">Next</span><b>Availability, redundancy and failover</b></a></nav>
+</main>
+</body>
+</html>

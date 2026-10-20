@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>SQL vs NoSQL | Load/Bearing</title>
+<meta name="description" content="Choose a database by its data model and access patterns. The label on the box matters much less.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">Topic 05 of 11</span>
+  <h1>SQL vs NoSQL</h1>
+  <p class="dek">Choose a database by its data model and access patterns. The label on the box matters much less.</p>
+  <div class="meta"><span>3 min read</span><span>Used in: <a href="../index.html#hypergrowth">7 · Hypergrowth</a></span></div>
+</header>
+<article class="wrap">
+
+<p>"SQL or NoSQL?" is a question about trade-offs: how your data relates, which queries must be fast, how much consistency you need, and how far writes must scale. A good answer starts from the access patterns and picks the store that serves them, and it's fine to use more than one.</p>
+
+<h2>Relational databases</h2>
+<p>PostgreSQL, MySQL and SQL Server store data in tables with a fixed schema, connect them with joins, and wrap changes in <strong>ACID transactions</strong>: atomic, consistent, isolated and durable. You can ask questions nobody planned for, because SQL can join and filter any columns.</p>
+<p>They scale up well (one large server handles a lot) and scale reads with <a href="replication.html">replicas</a>. Scaling writes past one primary means <a href="sharding.html">sharding</a>, which the database doesn't do for you, unless you add a layer such as Vitess or Citus or use a distributed SQL database (Spanner, CockroachDB, YugabyteDB).</p>
+
+<h2>The NoSQL families</h2>
+<div class="table"><table><thead><tr><th>Family</th><th>Data model</th><th>Examples</th><th>Good at</th></tr></thead><tbody><tr><td>Key-value</td><td>key → opaque value</td><td>Redis, DynamoDB, Memcached</td><td>Very fast lookups by key, caching, sessions, counters</td></tr><tr><td>Document</td><td>key → JSON-like document</td><td>MongoDB, Couchbase, Firestore</td><td>Nested objects read and written as a whole</td></tr><tr><td>Wide-column</td><td>partition key → sorted rows of columns</td><td>Cassandra, ScyllaDB, Bigtable, HBase</td><td>Huge write volume, time-ordered data, multi-region</td></tr><tr><td>Graph</td><td>nodes and edges</td><td>Neo4j, Amazon Neptune</td><td>Many-hop relationships (friends of friends, fraud rings)</td></tr><tr><td>Search</td><td>inverted index over documents</td><td>Elasticsearch, OpenSearch</td><td>Full-text search, relevance, faceted filters</td></tr><tr><td>Time-series</td><td>metric + timestamp → value</td><td>Prometheus, InfluxDB, TimescaleDB</td><td>Metrics, downsampling, retention windows</td></tr></tbody></table></div>
+<p>They have little in common except not being relational. What most of them share is that they are designed to <strong>partition automatically</strong> across many machines, in exchange for giving up general joins and, often, multi-row transactions.</p>
+
+<h2>The real trade-offs</h2>
+<div class="table"><table><thead><tr><th></th><th>Relational</th><th>Typical NoSQL (Cassandra, DynamoDB)</th></tr></thead><tbody><tr><td>Schema</td><td>Enforced by the database</td><td>Enforced by your code (schema-on-read). It still exists.</td></tr><tr><td>Queries</td><td>Any query, with joins</td><td>Only the queries the keys were designed for</td></tr><tr><td>Transactions</td><td>Multi-row ACID</td><td>Usually single-item or single-partition; limited multi-item</td></tr><tr><td>Consistency</td><td>Strong on the primary</td><td>Often tunable: eventual by default, strong at extra cost</td></tr><tr><td>Write scaling</td><td>One primary, unless you shard by hand</td><td>Built in: add nodes and data rebalances</td></tr><tr><td>Modelling</td><td>Normalise, then join</td><td>Denormalise: one table per query pattern</td></tr></tbody></table></div>
+
+<h2>Design from access patterns</h2>
+<p>With a store like DynamoDB or Cassandra, list the queries first, then design keys that answer each one by reading a single partition. A <strong>partition key</strong> decides which node holds the data, and a <strong>sort key</strong> orders items inside the partition.</p>
+<div class="math">query: "latest 20 messages in conversation C"
+table: messages   partition key = conversation_id   sort key = sent_at (descending)
+→ one partition read, already sorted, no join</div>
+<p>The same data might be written twice, for example messages by conversation <em>and</em> by user, because each query needs its own layout. Denormalising like this moves cost from reads to writes and puts the job of keeping copies in sync on you.</p>
+
+<h2>CAP, stated correctly</h2>
+<p>The CAP theorem says that during a <strong>network partition</strong>, a distributed store must choose between <strong>consistency</strong> (every read sees the latest write, or fails) and <strong>availability</strong> (every request gets an answer, possibly stale). It doesn't mean "pick two of three" in normal operation. <strong>PACELC</strong> adds the everyday case: else, when there's no partition, you trade <strong>latency</strong> against <strong>consistency</strong>. Cassandra and DynamoDB lean towards availability and low latency. Spanner leans towards consistency.</p>
+
+<h2>A sensible default</h2>
+<ul>
+<li><strong>Start with PostgreSQL</strong> unless you have a concrete reason not to. It handles relational data, JSON documents (<code>jsonb</code>), full-text search and a lot of scale on one machine with replicas.</li>
+<li>Reach for <strong>wide-column or DynamoDB</strong> when writes are huge and the access patterns are simple and known: chat messages, event logs, IoT readings, activity feeds.</li>
+<li>Add <strong>Redis</strong> for caching, rate-limit counters and leaderboards; <strong>Elasticsearch</strong> for search; a <strong>time-series</strong> store for metrics. These sit beside the main database rather than replacing it.</li>
+<li>Choose <strong>distributed SQL</strong> when you need both relational transactions and horizontal write scaling, and accept the higher latency per write.</li>
+</ul>
+
+<div class="note"><p><strong>In the game:</strong> the database is a relational primary that you scale with replicas and shards by hand. The six shards you need in <em>Hypergrowth</em> are roughly what Cassandra or DynamoDB would give you automatically, with the same rule underneath: writes scale only when each one lands on a single partition.</p></div>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>List the main queries and the read/write ratio before naming a database.</li>
+<li>Say whether you need multi-row transactions or joins.</li>
+<li>State the consistency each query needs: strong, read-your-writes or eventual.</li>
+<li>For NoSQL, give the partition key and sort key for each access pattern.</li>
+<li>Use more than one store when it helps, and say how they stay in sync.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Level 7: Hypergrowth</h2>
+  <p>Put this into practice against live traffic. Your progress in the game is saved in your browser.</p>
+  <a class="cta" href="../index.html#hypergrowth">Play level 7</a>
+</section>
+
+<h2>Further reading</h2>
+<ul>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly). The standard book on replication, partitioning and consistency.</li>
+<li><a href="https://sre.google/sre-book/table-of-contents/">Site Reliability Engineering</a>, Google's free book on running reliable systems.</li>
+<li><a href="https://aws.amazon.com/builders-library/">The Amazon Builders' Library</a>: practical articles on timeouts, retries, caching and load shedding.</li>
+<li><a href="https://github.com/donnemartin/system-design-primer">The System Design Primer</a>: a broad, community-maintained overview.</li>
+</ul>
+
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="indexing.html"><span class="label">Previous</span><b>Database indexing</b></a><a class="next" href="replication.html"><span class="label">Next</span><b>Database replication</b></a></nav>
+</main>
+</body>
+</html>

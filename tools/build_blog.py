@@ -347,6 +347,67 @@ CREATE INDEX orders_user_recent ON orders (user_id, created_at) INCLUDE (total);
 </ul>
 """),
 # ---------------------------------------------------------------------------
+dict(slug="sql-nosql", short="SQL vs NoSQL", title="SQL vs NoSQL",
+     dek="Choose a database by its data model and access patterns. The label on the box matters much less.",
+     levels=["hypergrowth"], practice="hypergrowth",
+     body=f"""
+<p>"SQL or NoSQL?" is a question about trade-offs: how your data relates, which queries must be fast, how much consistency you need, and how far writes must scale. A good answer starts from the access patterns and picks the store that serves them, and it's fine to use more than one.</p>
+
+<h2>Relational databases</h2>
+<p>PostgreSQL, MySQL and SQL Server store data in tables with a fixed schema, connect them with joins, and wrap changes in <strong>ACID transactions</strong>: atomic, consistent, isolated and durable. You can ask questions nobody planned for, because SQL can join and filter any columns.</p>
+<p>They scale up well (one large server handles a lot) and scale reads with <a href="replication.html">replicas</a>. Scaling writes past one primary means <a href="sharding.html">sharding</a>, which the database doesn't do for you, unless you add a layer such as Vitess or Citus or use a distributed SQL database (Spanner, CockroachDB, YugabyteDB).</p>
+
+<h2>The NoSQL families</h2>
+{table(["Family", "Data model", "Examples", "Good at"], [
+    ["Key-value", "key → opaque value", "Redis, DynamoDB, Memcached", "Very fast lookups by key, caching, sessions, counters"],
+    ["Document", "key → JSON-like document", "MongoDB, Couchbase, Firestore", "Nested objects read and written as a whole"],
+    ["Wide-column", "partition key → sorted rows of columns", "Cassandra, ScyllaDB, Bigtable, HBase", "Huge write volume, time-ordered data, multi-region"],
+    ["Graph", "nodes and edges", "Neo4j, Amazon Neptune", "Many-hop relationships (friends of friends, fraud rings)"],
+    ["Search", "inverted index over documents", "Elasticsearch, OpenSearch", "Full-text search, relevance, faceted filters"],
+    ["Time-series", "metric + timestamp → value", "Prometheus, InfluxDB, TimescaleDB", "Metrics, downsampling, retention windows"],
+])}
+<p>They have little in common except not being relational. What most of them share is that they are designed to <strong>partition automatically</strong> across many machines, in exchange for giving up general joins and, often, multi-row transactions.</p>
+
+<h2>The real trade-offs</h2>
+{table(["", "Relational", "Typical NoSQL (Cassandra, DynamoDB)"], [
+    ["Schema", "Enforced by the database", "Enforced by your code (schema-on-read). It still exists."],
+    ["Queries", "Any query, with joins", "Only the queries the keys were designed for"],
+    ["Transactions", "Multi-row ACID", "Usually single-item or single-partition; limited multi-item"],
+    ["Consistency", "Strong on the primary", "Often tunable: eventual by default, strong at extra cost"],
+    ["Write scaling", "One primary, unless you shard by hand", "Built in: add nodes and data rebalances"],
+    ["Modelling", "Normalise, then join", "Denormalise: one table per query pattern"],
+])}
+
+<h2>Design from access patterns</h2>
+<p>With a store like DynamoDB or Cassandra, list the queries first, then design keys that answer each one by reading a single partition. A <strong>partition key</strong> decides which node holds the data, and a <strong>sort key</strong> orders items inside the partition.</p>
+<div class="math">query: "latest 20 messages in conversation C"
+table: messages   partition key = conversation_id   sort key = sent_at (descending)
+→ one partition read, already sorted, no join</div>
+<p>The same data might be written twice, for example messages by conversation <em>and</em> by user, because each query needs its own layout. Denormalising like this moves cost from reads to writes and puts the job of keeping copies in sync on you.</p>
+
+<h2>CAP, stated correctly</h2>
+<p>The CAP theorem says that during a <strong>network partition</strong>, a distributed store must choose between <strong>consistency</strong> (every read sees the latest write, or fails) and <strong>availability</strong> (every request gets an answer, possibly stale). It doesn't mean "pick two of three" in normal operation. <strong>PACELC</strong> adds the everyday case: else, when there's no partition, you trade <strong>latency</strong> against <strong>consistency</strong>. Cassandra and DynamoDB lean towards availability and low latency. Spanner leans towards consistency.</p>
+
+<h2>A sensible default</h2>
+<ul>
+<li><strong>Start with PostgreSQL</strong> unless you have a concrete reason not to. It handles relational data, JSON documents (<code>jsonb</code>), full-text search and a lot of scale on one machine with replicas.</li>
+<li>Reach for <strong>wide-column or DynamoDB</strong> when writes are huge and the access patterns are simple and known: chat messages, event logs, IoT readings, activity feeds.</li>
+<li>Add <strong>Redis</strong> for caching, rate-limit counters and leaderboards; <strong>Elasticsearch</strong> for search; a <strong>time-series</strong> store for metrics. These sit beside the main database rather than replacing it.</li>
+<li>Choose <strong>distributed SQL</strong> when you need both relational transactions and horizontal write scaling, and accept the higher latency per write.</li>
+</ul>
+
+<div class="note"><p><strong>In the game:</strong> the database is a relational primary that you scale with replicas and shards by hand. The six shards you need in <em>Hypergrowth</em> are roughly what Cassandra or DynamoDB would give you automatically, with the same rule underneath: writes scale only when each one lands on a single partition.</p></div>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>List the main queries and the read/write ratio before naming a database.</li>
+<li>Say whether you need multi-row transactions or joins.</li>
+<li>State the consistency each query needs: strong, read-your-writes or eventual.</li>
+<li>For NoSQL, give the partition key and sort key for each access pattern.</li>
+<li>Use more than one store when it helps, and say how they stay in sync.</li>
+</ul>
+"""),
+# ---------------------------------------------------------------------------
 dict(slug="replication", short="Replication", title="Database replication",
      dek="Copies of your database give you more read capacity and a standby for when the primary dies. They cost consistency.",
      levels=["meltdown", "nines"], practice="nines",
@@ -533,6 +594,83 @@ drain time afterwards  = 3,560 ÷ (500 − 315) ≈ 19 s</div>
 <li>Pick a partition key for ordering and enough partitions for parallelism.</li>
 <li>Cover retries, the dead-letter queue and backpressure.</li>
 <li>Choose a queue or a log and explain why.</li>
+</ul>
+"""),
+# ---------------------------------------------------------------------------
+dict(slug="rate-limiting", short="Rate limiting", title="Rate limiting",
+     dek="Decide how much each client may ask for, and say no early and cheaply when they ask for more.",
+     levels=["flashsale"], practice="flashsale",
+     body=f"""
+<p>A rate limiter caps how many requests a client can make in a period of time. It protects you from abuse (scrapers, credential stuffing, a buggy client stuck in a retry loop), keeps one tenant from starving the others, and controls costs when each request calls something expensive. It's also <strong>load shedding</strong>: turning away excess work cheaply at the door instead of letting it overload the database.</p>
+<p>A rejected request gets <code>HTTP 429 Too Many Requests</code>, ideally with a <code>Retry-After</code> header so well-behaved clients know when to come back.</p>
+
+<h2>Where it runs and what it counts</h2>
+<ul>
+<li><strong>At the edge or API gateway</strong> (NGINX, Envoy, a CDN, a managed gateway): cheapest, and it stops abuse before it reaches your servers.</li>
+<li><strong>In the service</strong>: needed when the limit depends on business data, such as a plan tier or how many orders a user has placed today.</li>
+<li><strong>The key</strong> is what you count per: API key or user ID for logged-in traffic, IP address for anonymous traffic (careful: many users can share one IP behind a NAT), or a combination. Real systems layer several limits, for example 10 per second <em>and</em> 1,000 per hour per user, plus a global cap.</li>
+</ul>
+
+<h2>The algorithms</h2>
+{table(["Algorithm", "How it works", "Memory per key", "Trade-off"], [
+    ["Fixed window", "Count requests per clock window (e.g. per minute). Reset at the boundary.", "1 counter", "Simple, but allows 2× the limit across a boundary: 100 at 0:59 and 100 at 1:00."],
+    ["Sliding window log", "Store a timestamp per request. Count those in the last N seconds.", "1 entry per request", "Exact, but memory grows with traffic."],
+    ["Sliding window counter", "Weight the previous window's count by how much of it still overlaps.", "2 counters", "Close to exact, very cheap. A common production choice."],
+    ["Token bucket", "A bucket holds up to B tokens and refills at R per second. Each request spends one.", "tokens + timestamp", "Allows bursts up to B while holding the average to R."],
+    ["Leaky bucket", "Requests join a queue that drains at a fixed rate R.", "a queue", "Perfectly smooth output, but bursts wait or get dropped."],
+])}
+
+<h3>Sliding window counter</h3>
+<div class="math">limit = 100/min, we are 15 s into the current minute
+previous minute: 80 requests, current minute so far: 30
+estimate = 30 + 80 × (45 / 60) = 90  → allow (90 &lt; 100)</div>
+
+<h3>Token bucket</h3>
+<p>A token bucket answers "how big a burst is acceptable?" separately from "what's the long-run rate?". You don't need a timer to add tokens. Store the token count and the time of the last update, and top it up lazily on each request:</p>
+<div class="math">def allow(bucket, now):
+    bucket.tokens = min(B, bucket.tokens + (now - bucket.last) * R)
+    bucket.last = now
+    if bucket.tokens &gt;= 1:
+        bucket.tokens -= 1
+        return True
+    return False</div>
+<p>With B = 20 and R = 5 per second, a client can fire 20 requests at once, then gets 5 per second after that. In a multi-threaded server, wrap the read-modify-write in a lock per bucket, or use an atomic compare-and-swap.</p>
+<p><strong>Token vs leaky bucket:</strong> a token bucket lets bursts through immediately if tokens are saved up. A leaky bucket used as a queue smooths every burst into a steady stream, which suits protecting a downstream system that can only take a fixed rate.</p>
+
+<h2>Per-user limits without unbounded memory</h2>
+<p>One bucket per user, kept forever, grows without limit as new users and IPs appear. Two fixes:</p>
+<ul>
+<li><strong>Evict idle buckets.</strong> A bucket untouched for longer than B ÷ R seconds would be full anyway, so deleting it loses nothing: a new full bucket behaves the same. Keep buckets in an LRU map with a size cap, or set a TTL.</li>
+<li><strong>Store them in Redis with a TTL</strong>, so expiry is automatic.</li>
+</ul>
+
+<h2>Distributed rate limiting</h2>
+<p>With N app servers behind a load balancer, a counter in each server's memory lets a client get N times the limit. The options:</p>
+<ul>
+<li><strong>Divide the limit by N per server.</strong> No coordination, but it's only accurate if the load balancer spreads each client evenly, and it changes whenever N does.</li>
+<li><strong>A shared store, usually Redis.</strong> Every server checks the same counter. For a fixed window, <code>INCR key</code> followed by <code>EXPIRE key 60</code> on the first increment is enough. For a token bucket, the read-modify-write must be atomic, so run it as a <strong>Lua script</strong> inside Redis. A plain GET then SET from two servers at once lets both through.</li>
+<li><strong>Sliding log in Redis</strong> with a sorted set: <code>ZREMRANGEBYSCORE</code> to drop old entries, <code>ZADD</code> the new one, <code>ZCARD</code> to count, all in one transaction.</li>
+<li><strong>Local counters synced periodically</strong>: each server counts locally and pushes to the shared store every few hundred milliseconds. It's slightly inaccurate, but it removes a network hop from every request.</li>
+</ul>
+<p>Decide what happens when Redis is down. <strong>Fail open</strong> (allow everything) keeps the product working but drops protection. <strong>Fail closed</strong> (reject everything) is safer for expensive or security-sensitive endpoints such as login. Many systems fail open with a local in-memory limiter as a backstop.</p>
+
+<h2>Telling clients</h2>
+<div class="math">HTTP/1.1 429 Too Many Requests
+Retry-After: 12
+RateLimit-Limit: 100
+RateLimit-Remaining: 0
+RateLimit-Reset: 12</div>
+<p>Client libraries should back off with jitter when they see 429. Otherwise every rejected client retries at the same moment and the spike repeats.</p>
+
+<div class="note"><p><strong>In the game:</strong> there's no rate limiter component yet. In <em>Flash Sale</em>, a limiter is the other half of the queue: the queue absorbs real orders, and a per-user limit stops bots from filling that queue. Every request you reject cheaply at the edge is one the app tier and the database never see.</p></div>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Say what you're protecting, the key you limit on, and the limits.</li>
+<li>Pick an algorithm and give a reason: token bucket for bursts, sliding window counter for cheap accuracy.</li>
+<li>Share counters across servers with atomic operations (Redis plus Lua).</li>
+<li>Bound memory with TTLs or eviction.</li>
+<li>Choose fail-open or fail-closed, and return 429 with <code>Retry-After</code>.</li>
 </ul>
 """),
 # ---------------------------------------------------------------------------

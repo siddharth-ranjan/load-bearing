@@ -16,10 +16,10 @@
 </div></div>
 <main>
 <header class="post wrap">
-  <span class="label">Topic 03 of 8</span>
+  <span class="label">Topic 03 of 9</span>
   <h1>Caching</h1>
   <p class="dek">Keep the answers to popular questions in memory so the database only sees the questions nobody asked recently.</p>
-  <div class="meta"><span>3 min read</span><span>Used in: <a href="../index.html#meltdown">3 · Database Meltdown</a>, <a href="../index.html#flashsale">5 · Flash Sale</a>, <a href="../index.html#nines">6 · Four Nines</a>, <a href="../index.html#hypergrowth">7 · Hypergrowth</a></span></div>
+  <div class="meta"><span>4 min read</span><span>Used in: <a href="../index.html#meltdown">3 · Database Meltdown</a>, <a href="../index.html#flashsale">5 · Flash Sale</a>, <a href="../index.html#nines">6 · Four Nines</a>, <a href="../index.html#hypergrowth">7 · Hypergrowth</a></span></div>
 </header>
 <article class="wrap">
 
@@ -63,8 +63,22 @@ average latency = h × t_cache + (1 − h) × t_db</div>
 <h2>Failure modes to plan for</h2>
 <ul>
 <li><strong>Cache stampede:</strong> a hot key expires and a thousand requests miss at once, all hitting the database. Fix it with request coalescing (one request reloads while the others wait), random jitter on TTLs, or serving stale data while one request refreshes in the background.</li>
-<li><strong>Hot keys:</strong> one key gets so much traffic that its cache node saturates. Replicate it to several nodes or keep a small in-process copy.</li>
+<li><strong>Hot keys:</strong> one key gets so much traffic that its cache node saturates. The cluster looks fine on average while one node maxes out its CPU or network. See below.</li>
 <li><strong>Cold start:</strong> after a restart the hit rate is zero, and a database sized for 10% of reads suddenly sees 100%. Warm caches gradually, or keep enough database capacity to survive a cold cache.</li>
+</ul>
+
+<h3>Finding and fixing hot keys</h3>
+<p><strong>Detect</strong> them by looking for skew, not totals:</p>
+<ul>
+<li><strong>Per-node metrics:</strong> one cache node with far higher CPU, network or operations per second than its peers is the first sign.</li>
+<li><strong>Per-key counts:</strong> sample requests in the app or a proxy and keep a top-K list. A count-min sketch keeps the memory small. Redis can report its hottest keys with <code>redis-cli --hotkeys</code> when the eviction policy is LFU.</li>
+<li>Avoid <code>MONITOR</code> on a busy production Redis. It streams every command and can halve throughput.</li>
+</ul>
+<p><strong>Fix</strong> them by spreading or absorbing the load:</p>
+<ul>
+<li>Keep a small in-process cache with a short TTL (a second or two) for the hottest keys, so most reads never leave the app server.</li>
+<li>Replicate the key: write <code>trending#0</code> to <code>trending#9</code> on different nodes and have each reader pick one at random.</li>
+<li>Coalesce requests, so a thousand concurrent misses become one fetch.</li>
 </ul>
 
 <div class="note"><p><strong>In the game:</strong> each level sets a hit rate (85% in <em>Database Meltdown</em>). Adding the cache multiplies the reads reaching your database by 1 − hit rate. One cache costs less than one read replica and removes far more load, which is why it's the cheaper way through that level.</p></div>
@@ -94,7 +108,7 @@ average latency = h × t_cache + (1 − h) × t_db</div>
 </ul>
 
 </article>
-<nav class="pager wrap" aria-label="More topics"><a href="load-balancing.html"><span class="label">Previous</span><b>Load balancing and horizontal scaling</b></a><a class="next" href="replication.html"><span class="label">Next</span><b>Database replication</b></a></nav>
+<nav class="pager wrap" aria-label="More topics"><a href="load-balancing.html"><span class="label">Previous</span><b>Load balancing and horizontal scaling</b></a><a class="next" href="indexing.html"><span class="label">Next</span><b>Database indexing</b></a></nav>
 </main>
 </body>
 </html>

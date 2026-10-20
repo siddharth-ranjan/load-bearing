@@ -16,7 +16,7 @@
 </div></div>
 <main>
 <header class="post wrap">
-  <span class="label">Topic 01 of 8</span>
+  <span class="label">Topic 01 of 9</span>
   <h1>Back-of-the-envelope estimation</h1>
   <p class="dek">Before you draw a single box, work out how much traffic, data and bandwidth you are designing for.</p>
   <div class="meta"><span>3 min read</span><span>Used in: <a href="../index.html#hello">1 · Hello, World</a>, <a href="../index.html#frontpage">2 · Front Page</a>, <a href="../index.html#flashsale">5 · Flash Sale</a></span></div>
@@ -46,8 +46,8 @@ egress:   7,000 reads/s × 50 KB thumbnail ≈ 350 MB/s ≈ 2.8 Gbit/s</div>
 
 <h2>Numbers worth memorising</h2>
 <p>These are rounded orders of magnitude. Real hardware varies, but the ratios between rows are what matter.</p>
-<div class="table"><table><thead><tr><th>Operation</th><th>Rough time</th></tr></thead><tbody><tr><td>Read from main memory</td><td class="n">100 ns</td></tr><tr><td>Random read from SSD</td><td class="n">~100 µs</td></tr><tr><td>Round trip inside a data centre</td><td class="n">~0.5 ms</td></tr><tr><td>Cache GET over the network (Redis, Memcached)</td><td class="n">~1 ms</td></tr><tr><td>Indexed database query</td><td class="n">1–10 ms</td></tr><tr><td>Round trip, US East ↔ Europe</td><td class="n">~80 ms</td></tr><tr><td>Round trip, US ↔ Australia</td><td class="n">~150–200 ms</td></tr></tbody></table></div>
-<p>Memory is about 1,000 times faster than SSD, and SSD is far faster than going across the planet. That one ratio explains why caches and CDNs exist.</p>
+<div class="table"><table><thead><tr><th>Operation</th><th>Rough time</th></tr></thead><tbody><tr><td>L1 CPU cache reference</td><td class="n">~1 ns</td></tr><tr><td>L2 CPU cache reference</td><td class="n">~4 ns</td></tr><tr><td>Read from main memory</td><td class="n">100 ns</td></tr><tr><td>Random read from SSD</td><td class="n">~100 µs</td></tr><tr><td>Round trip inside a data centre</td><td class="n">~0.5 ms</td></tr><tr><td>Cache GET over the network (Redis, Memcached)</td><td class="n">~1 ms</td></tr><tr><td>Indexed database query</td><td class="n">1–10 ms</td></tr><tr><td>Round trip, US East ↔ Europe</td><td class="n">~80 ms</td></tr><tr><td>Round trip, US ↔ Australia</td><td class="n">~150–200 ms</td></tr></tbody></table></div>
+<p>Each step down the table is 10 to 1,000 times slower than the one above. L1 is about 100 times faster than main memory, memory is about 1,000 times faster than SSD, and SSD is far faster than going across the planet. Those ratios explain why caches and CDNs exist.</p>
 
 <h2>Capacity of common building blocks</h2>
 <p>Ballpark throughput for one node of each, assuming simple requests:</p>

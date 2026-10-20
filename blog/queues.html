@@ -16,10 +16,10 @@
 </div></div>
 <main>
 <header class="post wrap">
-  <span class="label">Topic 06 of 8</span>
+  <span class="label">Topic 07 of 9</span>
   <h1>Message queues and backpressure</h1>
   <p class="dek">Accept work now, do it at a pace you can sustain, and make sure you eventually catch up.</p>
-  <div class="meta"><span>3 min read</span><span>Used in: <a href="../index.html#flashsale">5 · Flash Sale</a></span></div>
+  <div class="meta"><span>5 min read</span><span>Used in: <a href="../index.html#flashsale">5 · Flash Sale</a></span></div>
 </header>
 <article class="wrap">
 
@@ -49,12 +49,22 @@ drain time afterwards  = 3,560 ÷ (500 − 315) ≈ 19 s</div>
 <li><strong>Exactly once:</strong> in practice, at-least-once delivery plus <strong>idempotent</strong> processing. Give each message an id (for example an idempotency key from the client), and have the worker skip ids it has already processed, using a unique constraint in the same transaction as the write.</li>
 </ul>
 
+<h2>Kafka specifically</h2>
+<p>A Kafka <strong>topic</strong> is split into <strong>partitions</strong>. Each partition is an ordered, append-only log. The message key decides which partition a message lands in, so all messages with the same key stay in order.</p>
+<figure><div class="dgw"><svg class="dg" width="456" height="322" viewBox="0 0 456 322" role="img" aria-label="One consumer group with four partitions and five consumers. Each partition goes to exactly one consumer, so the fifth gets nothing."><path d="M120,161.0 C143.0,161.0 143.0,65.0 166,65.0"/><polygon class="head" points="166,61.0 172,65.0 166,69.0"/><path d="M120,161.0 C143.0,161.0 143.0,129.0 166,129.0"/><polygon class="head" points="166,125.0 172,129.0 166,133.0"/><path d="M120,161.0 C143.0,161.0 143.0,193.0 166,193.0"/><polygon class="head" points="166,189.0 172,193.0 166,197.0"/><path d="M120,161.0 C143.0,161.0 143.0,257.0 166,257.0"/><polygon class="head" points="166,253.0 172,257.0 166,261.0"/><path d="M284,65.0 C307.0,65.0 307.0,33.0 330,33.0"/><polygon class="head" points="330,29.0 336,33.0 330,37.0"/><path d="M284,129.0 C307.0,129.0 307.0,97.0 330,97.0"/><polygon class="head" points="330,93.0 336,97.0 330,101.0"/><path d="M284,193.0 C307.0,193.0 307.0,161.0 330,161.0"/><polygon class="head" points="330,157.0 336,161.0 330,165.0"/><path d="M284,257.0 C307.0,257.0 307.0,225.0 330,225.0"/><polygon class="head" points="330,221.0 336,225.0 330,229.0"/><g class=""><rect x="8" y="136.0" width="112" height="50" rx="5"/><text class="tag" x="64.0" y="158.0" text-anchor="middle">PRODUCER</text><text class="sub" x="64.0" y="174.0" text-anchor="middle">key = order_id</text></g><g class=""><rect x="172" y="40.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="62.0" text-anchor="middle">PARTITION 0</text><text class="sub" x="228.0" y="78.0" text-anchor="middle"></text></g><g class=""><rect x="172" y="104.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="126.0" text-anchor="middle">PARTITION 1</text><text class="sub" x="228.0" y="142.0" text-anchor="middle"></text></g><g class=""><rect x="172" y="168.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="190.0" text-anchor="middle">PARTITION 2</text><text class="sub" x="228.0" y="206.0" text-anchor="middle"></text></g><g class=""><rect x="172" y="232.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="254.0" text-anchor="middle">PARTITION 3</text><text class="sub" x="228.0" y="270.0" text-anchor="middle"></text></g><g class="hot"><rect x="336" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="30.0" text-anchor="middle">CONSUMER A</text><text class="sub" x="392.0" y="46.0" text-anchor="middle">P0</text></g><g class="hot"><rect x="336" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="94.0" text-anchor="middle">CONSUMER B</text><text class="sub" x="392.0" y="110.0" text-anchor="middle">P1</text></g><g class="hot"><rect x="336" y="136.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="158.0" text-anchor="middle">CONSUMER C</text><text class="sub" x="392.0" y="174.0" text-anchor="middle">P2</text></g><g class="hot"><rect x="336" y="200.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="222.0" text-anchor="middle">CONSUMER D</text><text class="sub" x="392.0" y="238.0" text-anchor="middle">P3</text></g><g class=""><rect x="336" y="264.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="286.0" text-anchor="middle">CONSUMER E</text><text class="sub" x="392.0" y="302.0" text-anchor="middle">idle</text></g></svg></div><figcaption>One consumer group with four partitions and five consumers. Each partition goes to exactly one consumer, so the fifth gets nothing.</figcaption></figure>
+<h3>Consumer groups set your parallelism</h3>
+<p>Consumers that share a <code>group.id</code> split the partitions between them, and each partition is read by exactly one consumer in the group. So <strong>the partition count is the maximum parallelism</strong> for a group: with 12 partitions, a 13th consumer gets nothing to do. Separate groups each read the whole topic independently, which is how one event feeds billing, search and analytics at the same time.</p>
+<p>Choose the partition count with headroom. Adding partitions later changes which partition each key maps to, which breaks per-key ordering for messages in flight. When consumers join or leave, the group <strong>rebalances</strong> and briefly pauses consumption.</p>
+<h3>What Kafka actually guarantees</h3>
+<div class="table"><table><thead><tr><th>You get</th><th>When</th></tr></thead><tbody><tr><td>At most once</td><td>The consumer commits its offset <em>before</em> processing. A crash after the commit skips the message.</td></tr><tr><td>At least once (the usual default)</td><td>The consumer commits <em>after</em> processing. A crash before the commit means the message is processed again.</td></tr><tr><td>Exactly once, inside Kafka</td><td>Idempotent producers (on by default since Kafka 3.0) drop duplicates caused by retries, and transactions commit the output messages and the consumer offsets together. This covers reading from Kafka, processing, and writing back to Kafka.</td></tr></tbody></table></div>
+<p>Exactly-once stops at Kafka's edge. If your consumer charges a card or writes to Postgres, a crash between that side effect and the offset commit still repeats it. You still need an idempotency key in the external system.</p>
+
 <h2>When things go wrong</h2>
 <ul>
 <li><strong>Retries with exponential backoff and jitter:</strong> wait 1 s, 2 s, 4 s and so on, with randomness so retries don't arrive in synchronised waves.</li>
-<li><strong>Dead-letter queue:</strong> after N failed attempts, move the message aside for a person to inspect, so one bad message can't block the queue.</li>
+<li><strong>Dead-letter queue:</strong> after N failed attempts, or on an error that can never succeed (such as a malformed payload), move the message aside so it can't block the queue. Someone has to own draining it: alert when it isn't empty, fix the cause, then replay the messages.</li>
 <li><strong>Visibility timeout:</strong> a message being processed is hidden from other workers until it's acknowledged or the timeout expires.</li>
-<li><strong>Backpressure:</strong> when the queue is too deep, slow producers down or reject new work (HTTP 429 or 503) rather than buffering without limit.</li>
+<li><strong>Backpressure:</strong> when consumers fall behind, you can add consumers (up to the partition count), make each message cheaper (for example by batching database writes), slow producers down, reject new work (HTTP 429 or 503), or shed low-priority work. Buffering without limit only delays the failure.</li>
 <li><strong>Outbox pattern:</strong> write the business row and an "outbox" row in one database transaction, then publish from the outbox. This avoids "saved but never published" and "published but never saved".</li>
 </ul>
 
@@ -68,6 +78,7 @@ drain time afterwards  = 3,560 ÷ (500 − 315) ≈ 19 s</div>
 <li>Say which work becomes asynchronous and what the user sees meanwhile.</li>
 <li>Size workers above the average arrival rate, and the queue for the burst.</li>
 <li>State the delivery guarantee and how processing stays idempotent.</li>
+<li>Pick a partition key for ordering and enough partitions for parallelism.</li>
 <li>Cover retries, the dead-letter queue and backpressure.</li>
 <li>Choose a queue or a log and explain why.</li>
 </ul>

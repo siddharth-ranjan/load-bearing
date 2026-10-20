@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Database indexing | Load/Bearing</title>
+<meta name="description" content="Before you buy another database, make each query touch fewer rows. Indexes are the cheapest scaling you&#x27;ll ever do.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="blog.css">
+</head>
+<body>
+<div class="bar"><div class="wrap">
+  <a class="brand" href="../index.html">Load<span>/</span>Bearing</a>
+  <nav aria-label="Site"><a href="../index.html">Play</a><a href="index.html">Field notes</a></nav>
+</div></div>
+<main>
+<header class="post wrap">
+  <span class="label">Topic 04 of 9</span>
+  <h1>Database indexing</h1>
+  <p class="dek">Before you buy another database, make each query touch fewer rows. Indexes are the cheapest scaling you'll ever do.</p>
+  <div class="meta"><span>4 min read</span><span>Used in: <a href="../index.html#meltdown">3 · Database Meltdown</a></span></div>
+</header>
+<article class="wrap">
+
+<p>Without an index, finding the rows that match <code>WHERE email = 'a@b.com'</code> means reading every row in the table: a <strong>full table scan</strong>. At a million rows that may take hundreds of milliseconds. An index is a second, sorted structure that maps column values to row locations, so the database can jump straight to the matches, usually in well under a millisecond.</p>
+<p>The cost is that every index has to be kept up to date on every write, and it takes space on disk and in memory. Indexing well means knowing which query shapes each kind of index serves, and adding only the ones your queries need.</p>
+
+<h2>B-tree indexes</h2>
+<p>Almost every relational index is a <strong>B-tree</strong>, or more precisely a B+tree. It's a balanced tree of fixed-size pages. Each page holds hundreds of sorted keys, so the tree is wide and shallow: three or four levels reach a billion rows. Leaf pages hold the keys in order and are linked to each other, which makes range scans cheap.</p>
+<figure><div class="dgw"><svg class="dg" width="456" height="258" viewBox="0 0 456 258" role="img" aria-label="A B+tree. Lookups walk root → internal → leaf. Leaves are sorted and linked, so a range query reads neighbouring leaves."><path d="M120,129.0 C143.0,129.0 143.0,97.0 166,97.0"/><polygon class="head" points="166,93.0 172,97.0 166,101.0"/><path d="M120,129.0 C143.0,129.0 143.0,161.0 166,161.0"/><polygon class="head" points="166,157.0 172,161.0 166,165.0"/><path d="M284,97.0 C307.0,97.0 307.0,33.0 330,33.0"/><polygon class="head" points="330,29.0 336,33.0 330,37.0"/><path d="M284,97.0 C307.0,97.0 307.0,97.0 330,97.0"/><polygon class="head" points="330,93.0 336,97.0 330,101.0"/><path d="M284,161.0 C307.0,161.0 307.0,161.0 330,161.0"/><polygon class="head" points="330,157.0 336,161.0 330,165.0"/><path d="M284,161.0 C307.0,161.0 307.0,225.0 330,225.0"/><polygon class="head" points="330,221.0 336,225.0 330,229.0"/><g class="hot"><rect x="8" y="104.0" width="112" height="50" rx="5"/><text class="tag" x="64.0" y="126.0" text-anchor="middle">ROOT</text><text class="sub" x="64.0" y="142.0" text-anchor="middle">a … z</text></g><g class=""><rect x="172" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="94.0" text-anchor="middle">INTERNAL</text><text class="sub" x="228.0" y="110.0" text-anchor="middle">a … m</text></g><g class=""><rect x="172" y="136.0" width="112" height="50" rx="5"/><text class="tag" x="228.0" y="158.0" text-anchor="middle">INTERNAL</text><text class="sub" x="228.0" y="174.0" text-anchor="middle">n … z</text></g><g class=""><rect x="336" y="8.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="30.0" text-anchor="middle">LEAF</text><text class="sub" x="392.0" y="46.0" text-anchor="middle">a … f</text></g><g class=""><rect x="336" y="72.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="94.0" text-anchor="middle">LEAF</text><text class="sub" x="392.0" y="110.0" text-anchor="middle">g … m</text></g><g class=""><rect x="336" y="136.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="158.0" text-anchor="middle">LEAF</text><text class="sub" x="392.0" y="174.0" text-anchor="middle">n … s</text></g><g class=""><rect x="336" y="200.0" width="112" height="50" rx="5"/><text class="tag" x="392.0" y="222.0" text-anchor="middle">LEAF</text><text class="sub" x="392.0" y="238.0" text-anchor="middle">t … z</text></g></svg></div><figcaption>A B+tree. Lookups walk root → internal → leaf. Leaves are sorted and linked, so a range query reads neighbouring leaves.</figcaption></figure>
+
+<h2>Hash indexes</h2>
+<p>A hash index maps <code>hash(value)</code> to row locations. An equality lookup costs O(1), but hashing destroys ordering, so it can't answer anything else. PostgreSQL offers hash indexes, and many key-value stores are hash-based internally, but in relational databases B-trees are the default for good reason.</p>
+<div class="table"><table><thead><tr><th>Query shape</th><th>B-tree</th><th>Hash</th></tr></thead><tbody><tr><td><code>WHERE id = 42</code></td><td>✓</td><td>✓ (slightly faster)</td></tr><tr><td><code>WHERE created_at &gt; '2026-10-01'</code></td><td>✓</td><td>✗</td></tr><tr><td><code>WHERE name LIKE 'sid%'</code> (prefix)</td><td>✓</td><td>✗</td></tr><tr><td><code>ORDER BY created_at LIMIT 20</code></td><td>✓ (no sort needed)</td><td>✗</td></tr><tr><td><code>MIN</code> / <code>MAX</code></td><td>✓ (first or last leaf)</td><td>✗</td></tr><tr><td><code>WHERE name LIKE '%sid%'</code></td><td>✗ (needs a full scan or a trigram index)</td><td>✗</td></tr></tbody></table></div>
+<p>Write-heavy stores such as Cassandra and RocksDB use a third structure, the <strong>LSM tree</strong>. It buffers writes in memory and flushes sorted files to disk, which trades some read speed for much faster writes.</p>
+
+<h2>Composite indexes and column order</h2>
+<p>An index on <code>(user_id, created_at)</code> is sorted by <code>user_id</code> first, then by <code>created_at</code> within each user, like a phone book sorted by last name and then first name. That gives the <strong>leftmost-prefix rule</strong>:</p>
+<div class="table"><table><thead><tr><th>Query</th><th>Uses the index?</th></tr></thead><tbody><tr><td><code>WHERE user_id = 7</code></td><td>✓ the leftmost column</td></tr><tr><td><code>WHERE user_id = 7 AND created_at &gt; …</code></td><td>✓ both columns</td></tr><tr><td><code>WHERE user_id = 7 ORDER BY created_at DESC LIMIT 20</code></td><td>✓ already in order, so no sort</td></tr><tr><td><code>WHERE created_at &gt; …</code></td><td>✗ skips the leftmost column</td></tr></tbody></table></div>
+<p>The usual rule: put columns compared with <strong>equality first</strong>, then the column used for a <strong>range or sort</strong>. Once the index hits a range condition, the columns after it can't narrow the search any further.</p>
+
+<h2>Covering indexes</h2>
+<p>An index lookup normally finds row locations, then fetches each row from the table. If the index already contains every column the query needs, the database can skip the table entirely. That's a <strong>covering index</strong>, and the plan shows an <em>index-only scan</em>.</p>
+<div class="math">-- query: SELECT created_at, total FROM orders WHERE user_id = 7 ORDER BY created_at DESC LIMIT 20
+CREATE INDEX orders_user_recent ON orders (user_id, created_at) INCLUDE (total);   -- PostgreSQL</div>
+<p>In MySQL's InnoDB, the table itself is stored as a B-tree on the primary key (a <strong>clustered index</strong>), and every secondary index stores the primary key. So a secondary index always covers queries that only need its own columns plus the primary key.</p>
+
+<h2>When an index makes things slower</h2>
+<ul>
+<li><strong>Writes pay for every index.</strong> An insert into a table with eight indexes is nine B-tree updates. On write-heavy tables, unused indexes are pure cost.</li>
+<li><strong>Low selectivity.</strong> An index on <code>status</code>, where 90% of rows are <code>'active'</code>, still makes the database visit most of the table, through slow random reads. Past roughly 5–10% of rows, a sequential scan is faster, and the query planner knows it.</li>
+<li><strong>Memory pressure.</strong> Indexes compete with data for the buffer pool. Too many indexes push hot data out of memory.</li>
+<li><strong>Indexes the query can't use.</strong> <code>WHERE lower(email) = …</code> ignores an index on <code>email</code> (index the expression instead). So do a leading wildcard, an implicit type cast, or an <code>OR</code> across different columns.</li>
+<li><strong>Building one on a live table.</strong> A plain <code>CREATE INDEX</code> can block writes for the whole build. PostgreSQL's <code>CREATE INDEX CONCURRENTLY</code> avoids that.</li>
+</ul>
+
+<h2>Check, don't guess</h2>
+<p>Run <code>EXPLAIN ANALYZE</code> on slow queries and read the plan. A <em>Seq Scan</em> on a large table with a selective filter means a missing index. An <em>Index Scan</em> means the index is used, and an <em>Index Only Scan</em> means it covers the query. Turn on the slow query log (or <code>pg_stat_statements</code>) to find the queries worth fixing, and check index usage statistics for indexes nothing reads.</p>
+
+<div class="note"><p><strong>In the game:</strong> the database's 1,500 reads per second assumes every query is indexed. In real life a missing index can turn a 1 ms lookup into a 500 ms scan and cut capacity by 500 times. When <em>Database Meltdown</em> starts, the first question is whether the queries are cheap, before you reach for a cache or replicas.</p></div>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Name the queries the main tables must serve, then the indexes for them.</li>
+<li>Order composite index columns: equality first, then range or sort.</li>
+<li>Use a covering index for the hottest read path.</li>
+<li>Say what each index costs on writes, and avoid low-selectivity indexes.</li>
+<li>Mention <code>EXPLAIN</code> and the slow query log as how you'd verify.</li>
+</ul>
+
+<section class="game">
+  <span class="label">Practise it</span>
+  <h2>Level 3: Database Meltdown</h2>
+  <p>Put this into practice against live traffic. Your progress in the game is saved in your browser.</p>
+  <a class="cta" href="../index.html#meltdown">Play level 3</a>
+</section>
+
+<h2>Further reading</h2>
+<ul>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly). The standard book on replication, partitioning and consistency.</li>
+<li><a href="https://sre.google/sre-book/table-of-contents/">Site Reliability Engineering</a>, Google's free book on running reliable systems.</li>
+<li><a href="https://aws.amazon.com/builders-library/">The Amazon Builders' Library</a>: practical articles on timeouts, retries, caching and load shedding.</li>
+<li><a href="https://github.com/donnemartin/system-design-primer">The System Design Primer</a>: a broad, community-maintained overview.</li>
+</ul>
+
+</article>
+<nav class="pager wrap" aria-label="More topics"><a href="caching.html"><span class="label">Previous</span><b>Caching</b></a><a class="next" href="replication.html"><span class="label">Next</span><b>Database replication</b></a></nav>
+</main>
+</body>
+</html>

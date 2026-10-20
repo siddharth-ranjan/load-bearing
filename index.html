@@ -379,6 +379,7 @@ const TOPICS = {
   estimation:       'Back-of-the-envelope estimation',
   'load-balancing': 'Load balancing and horizontal scaling',
   caching:          'Caching',
+  indexing:         'Database indexing',
   replication:      'Database replication',
   cdn:              'CDNs and edge caching',
   queues:           'Message queues and backpressure',
@@ -409,7 +410,7 @@ const LEVELS = [
     terms:[['Load balancer','Routes each request to a healthy backend using round-robin, least-connections or hashing.'],['Utilisation (ρ)','Load divided by capacity. Above ~0.8, queues build fast.'],['Headroom','Spare capacity kept for spikes and for losing a machine.']],
     interview:'Say which layer you are scaling and why. "The app tier is stateless, so I put it behind an L7 load balancer and autoscale on CPU" is a strong sentence.' } },
 
-{ id:'meltdown', topics:[['caching', "Hit rate math: how much database load a cache removes."], ['replication', "The other way to add read capacity, and what it costs."]], name:'Database Meltdown', short:'Caching and replicas',
+{ id:'meltdown', topics:[['caching', "Hit rate math: how much database load a cache removes."], ['replication', "The other way to add read capacity, and what it costs."], ['indexing', "Make each query cheaper before you buy more database."]], name:'Database Meltdown', short:'Caching and replicas',
   story:'The blog is now a recipe site at 6,000 req/s. Nearly everything is a read of the same popular recipes, and one database only handles 1,500 reads per second.',
   sc:{ rps:6000, read:.92, static:.1, far:0, hit:.85, burst:1, ramp:true, T:60, failures:[] },
   goals:{ p95:200, err:1, budget:1000 }, unlock:['lb','app','cache','db','replica'], max:{ app:12, db:1, replica:4 }, start:{ lb:1, app:2, db:1 },

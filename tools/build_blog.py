@@ -28,8 +28,9 @@ FONTS = ('<link rel="preconnect" href="https://fonts.googleapis.com">'
          '&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">')
 
 
-def diagram(cols, caption):
-    """cols: list of columns; each column is a list of (tag, sub, hot) boxes. Draws all-to-all arrows between neighbours."""
+def diagram(cols, caption, edges=None):
+    """cols: list of columns; each column is a list of (tag, sub, hot) boxes.
+    Draws all-to-all arrows between neighbouring columns unless edges[i] lists (from, to) pairs for gap i."""
     bw, bh, gx, gy, pad = 112, 50, 52, 14, 8
     heights = [len(c) * bh + (len(c) - 1) * gy for c in cols]
     H = max(heights) + pad * 2
@@ -41,12 +42,14 @@ def diagram(cols, caption):
         pos.append([(x, y0 + j * (bh + gy)) for j in range(len(col))])
     parts = [f'<svg class="dg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" role="img" aria-label="{html.escape(caption)}">']
     for i in range(len(cols) - 1):
-        for (ax, ay) in pos[i]:
-            for (bx, by) in pos[i + 1]:
-                x1, y1, x2, y2 = ax + bw, ay + bh / 2, bx - 6, by + bh / 2
-                mx = (x1 + x2) / 2
-                parts.append(f'<path d="M{x1},{y1} C{mx},{y1} {mx},{y2} {x2},{y2}"/>')
-                parts.append(f'<polygon class="head" points="{x2},{y2 - 4} {x2 + 6},{y2} {x2},{y2 + 4}"/>')
+        pairs = (edges[i] if edges and i < len(edges) and edges[i] is not None
+                 else [(a, b) for a in range(len(cols[i])) for b in range(len(cols[i + 1]))])
+        for a, b in pairs:
+            (ax, ay), (bx, by) = pos[i][a], pos[i + 1][b]
+            x1, y1, x2, y2 = ax + bw, ay + bh / 2, bx - 6, by + bh / 2
+            mx = (x1 + x2) / 2
+            parts.append(f'<path d="M{x1},{y1} C{mx},{y1} {mx},{y2} {x2},{y2}"/>')
+            parts.append(f'<polygon class="head" points="{x2},{y2 - 4} {x2 + 6},{y2} {x2},{y2 + 4}"/>')
     for i, col in enumerate(cols):
         for (tag, sub, hot), (x, y) in zip(col, pos[i]):
             parts.append(f'<g class="{"hot" if hot else ""}"><rect x="{x}" y="{y}" width="{bw}" height="{bh}" rx="5"/>'
@@ -100,6 +103,8 @@ egress:   7,000 reads/s × 50 KB thumbnail ≈ 350 MB/s ≈ 2.8 Gbit/s</div>
 <h2>Numbers worth memorising</h2>
 <p>These are rounded orders of magnitude. Real hardware varies, but the ratios between rows are what matter.</p>
 {table(["Operation", "Rough time"], [
+    ["L1 CPU cache reference", "~1 ns"],
+    ["L2 CPU cache reference", "~4 ns"],
     ["Read from main memory", "100 ns"],
     ["Random read from SSD", "~100 µs"],
     ["Round trip inside a data centre", "~0.5 ms"],
@@ -108,7 +113,7 @@ egress:   7,000 reads/s × 50 KB thumbnail ≈ 350 MB/s ≈ 2.8 Gbit/s</div>
     ["Round trip, US East ↔ Europe", "~80 ms"],
     ["Round trip, US ↔ Australia", "~150–200 ms"],
 ], numeric=(1,))}
-<p>Memory is about 1,000 times faster than SSD, and SSD is far faster than going across the planet. That one ratio explains why caches and CDNs exist.</p>
+<p>Each step down the table is 10 to 1,000 times slower than the one above. L1 is about 100 times faster than main memory, memory is about 1,000 times faster than SSD, and SSD is far faster than going across the planet. Those ratios explain why caches and CDNs exist.</p>
 
 <h2>Capacity of common building blocks</h2>
 <p>Ballpark throughput for one node of each, assuming simple requests:</p>
@@ -247,8 +252,22 @@ average latency = h × t_cache + (1 − h) × t_db</div>
 <h2>Failure modes to plan for</h2>
 <ul>
 <li><strong>Cache stampede:</strong> a hot key expires and a thousand requests miss at once, all hitting the database. Fix it with request coalescing (one request reloads while the others wait), random jitter on TTLs, or serving stale data while one request refreshes in the background.</li>
-<li><strong>Hot keys:</strong> one key gets so much traffic that its cache node saturates. Replicate it to several nodes or keep a small in-process copy.</li>
+<li><strong>Hot keys:</strong> one key gets so much traffic that its cache node saturates. The cluster looks fine on average while one node maxes out its CPU or network. See below.</li>
 <li><strong>Cold start:</strong> after a restart the hit rate is zero, and a database sized for 10% of reads suddenly sees 100%. Warm caches gradually, or keep enough database capacity to survive a cold cache.</li>
+</ul>
+
+<h3>Finding and fixing hot keys</h3>
+<p><strong>Detect</strong> them by looking for skew, not totals:</p>
+<ul>
+<li><strong>Per-node metrics:</strong> one cache node with far higher CPU, network or operations per second than its peers is the first sign.</li>
+<li><strong>Per-key counts:</strong> sample requests in the app or a proxy and keep a top-K list. A count-min sketch keeps the memory small. Redis can report its hottest keys with <code>redis-cli --hotkeys</code> when the eviction policy is LFU.</li>
+<li>Avoid <code>MONITOR</code> on a busy production Redis. It streams every command and can halve throughput.</li>
+</ul>
+<p><strong>Fix</strong> them by spreading or absorbing the load:</p>
+<ul>
+<li>Keep a small in-process cache with a short TTL (a second or two) for the hottest keys, so most reads never leave the app server.</li>
+<li>Replicate the key: write <code>trending#0</code> to <code>trending#9</code> on different nodes and have each reader pick one at random.</li>
+<li>Coalesce requests, so a thousand concurrent misses become one fetch.</li>
 </ul>
 
 <div class="note"><p><strong>In the game:</strong> each level sets a hit rate (85% in <em>Database Meltdown</em>). Adding the cache multiplies the reads reaching your database by 1 − hit rate. One cache costs less than one read replica and removes far more load, which is why it's the cheaper way through that level.</p></div>
@@ -260,6 +279,71 @@ average latency = h × t_cache + (1 − h) × t_db</div>
 <li>Choose a TTL and an invalidation strategy.</li>
 <li>Mention stampede protection for hot keys.</li>
 <li>Say what happens if the cache is empty or down.</li>
+</ul>
+"""),
+# ---------------------------------------------------------------------------
+dict(slug="indexing", short="Indexing", title="Database indexing",
+     dek="Before you buy another database, make each query touch fewer rows. Indexes are the cheapest scaling you'll ever do.",
+     levels=["meltdown"], practice="meltdown",
+     body=f"""
+<p>Without an index, finding the rows that match <code>WHERE email = 'a@b.com'</code> means reading every row in the table: a <strong>full table scan</strong>. At a million rows that may take hundreds of milliseconds. An index is a second, sorted structure that maps column values to row locations, so the database can jump straight to the matches, usually in well under a millisecond.</p>
+<p>The cost is that every index has to be kept up to date on every write, and it takes space on disk and in memory. Indexing well means knowing which query shapes each kind of index serves, and adding only the ones your queries need.</p>
+
+<h2>B-tree indexes</h2>
+<p>Almost every relational index is a <strong>B-tree</strong>, or more precisely a B+tree. It's a balanced tree of fixed-size pages. Each page holds hundreds of sorted keys, so the tree is wide and shallow: three or four levels reach a billion rows. Leaf pages hold the keys in order and are linked to each other, which makes range scans cheap.</p>
+{diagram([[B("ROOT", "a … z", True)], [B("INTERNAL", "a … m"), B("INTERNAL", "n … z")], [B("LEAF", "a … f"), B("LEAF", "g … m"), B("LEAF", "n … s"), B("LEAF", "t … z")]],
+         "A B+tree. Lookups walk root → internal → leaf. Leaves are sorted and linked, so a range query reads neighbouring leaves.",
+         edges=[[(0, 0), (0, 1)], [(0, 0), (0, 1), (1, 2), (1, 3)]])}
+
+<h2>Hash indexes</h2>
+<p>A hash index maps <code>hash(value)</code> to row locations. An equality lookup costs O(1), but hashing destroys ordering, so it can't answer anything else. PostgreSQL offers hash indexes, and many key-value stores are hash-based internally, but in relational databases B-trees are the default for good reason.</p>
+{table(["Query shape", "B-tree", "Hash"], [
+    ["<code>WHERE id = 42</code>", "✓", "✓ (slightly faster)"],
+    ["<code>WHERE created_at &gt; '2026-10-01'</code>", "✓", "✗"],
+    ["<code>WHERE name LIKE 'sid%'</code> (prefix)", "✓", "✗"],
+    ["<code>ORDER BY created_at LIMIT 20</code>", "✓ (no sort needed)", "✗"],
+    ["<code>MIN</code> / <code>MAX</code>", "✓ (first or last leaf)", "✗"],
+    ["<code>WHERE name LIKE '%sid%'</code>", "✗ (needs a full scan or a trigram index)", "✗"],
+])}
+<p>Write-heavy stores such as Cassandra and RocksDB use a third structure, the <strong>LSM tree</strong>. It buffers writes in memory and flushes sorted files to disk, which trades some read speed for much faster writes.</p>
+
+<h2>Composite indexes and column order</h2>
+<p>An index on <code>(user_id, created_at)</code> is sorted by <code>user_id</code> first, then by <code>created_at</code> within each user, like a phone book sorted by last name and then first name. That gives the <strong>leftmost-prefix rule</strong>:</p>
+{table(["Query", "Uses the index?"], [
+    ["<code>WHERE user_id = 7</code>", "✓ the leftmost column"],
+    ["<code>WHERE user_id = 7 AND created_at &gt; …</code>", "✓ both columns"],
+    ["<code>WHERE user_id = 7 ORDER BY created_at DESC LIMIT 20</code>", "✓ already in order, so no sort"],
+    ["<code>WHERE created_at &gt; …</code>", "✗ skips the leftmost column"],
+])}
+<p>The usual rule: put columns compared with <strong>equality first</strong>, then the column used for a <strong>range or sort</strong>. Once the index hits a range condition, the columns after it can't narrow the search any further.</p>
+
+<h2>Covering indexes</h2>
+<p>An index lookup normally finds row locations, then fetches each row from the table. If the index already contains every column the query needs, the database can skip the table entirely. That's a <strong>covering index</strong>, and the plan shows an <em>index-only scan</em>.</p>
+<div class="math">-- query: SELECT created_at, total FROM orders WHERE user_id = 7 ORDER BY created_at DESC LIMIT 20
+CREATE INDEX orders_user_recent ON orders (user_id, created_at) INCLUDE (total);   -- PostgreSQL</div>
+<p>In MySQL's InnoDB, the table itself is stored as a B-tree on the primary key (a <strong>clustered index</strong>), and every secondary index stores the primary key. So a secondary index always covers queries that only need its own columns plus the primary key.</p>
+
+<h2>When an index makes things slower</h2>
+<ul>
+<li><strong>Writes pay for every index.</strong> An insert into a table with eight indexes is nine B-tree updates. On write-heavy tables, unused indexes are pure cost.</li>
+<li><strong>Low selectivity.</strong> An index on <code>status</code>, where 90% of rows are <code>'active'</code>, still makes the database visit most of the table, through slow random reads. Past roughly 5–10% of rows, a sequential scan is faster, and the query planner knows it.</li>
+<li><strong>Memory pressure.</strong> Indexes compete with data for the buffer pool. Too many indexes push hot data out of memory.</li>
+<li><strong>Indexes the query can't use.</strong> <code>WHERE lower(email) = …</code> ignores an index on <code>email</code> (index the expression instead). So do a leading wildcard, an implicit type cast, or an <code>OR</code> across different columns.</li>
+<li><strong>Building one on a live table.</strong> A plain <code>CREATE INDEX</code> can block writes for the whole build. PostgreSQL's <code>CREATE INDEX CONCURRENTLY</code> avoids that.</li>
+</ul>
+
+<h2>Check, don't guess</h2>
+<p>Run <code>EXPLAIN ANALYZE</code> on slow queries and read the plan. A <em>Seq Scan</em> on a large table with a selective filter means a missing index. An <em>Index Scan</em> means the index is used, and an <em>Index Only Scan</em> means it covers the query. Turn on the slow query log (or <code>pg_stat_statements</code>) to find the queries worth fixing, and check index usage statistics for indexes nothing reads.</p>
+
+<div class="note"><p><strong>In the game:</strong> the database's 1,500 reads per second assumes every query is indexed. In real life a missing index can turn a 1 ms lookup into a 500 ms scan and cut capacity by 500 times. When <em>Database Meltdown</em> starts, the first question is whether the queries are cheap, before you reach for a cache or replicas.</p></div>
+
+<h2>Interview checklist</h2>
+<ul class="check">
+<li>Name the queries the main tables must serve, then the indexes for them.</li>
+<li>Order composite index columns: equality first, then range or sort.</li>
+<li>Use a covering index for the hottest read path.</li>
+<li>Say what each index costs on writes, and avoid low-selectivity indexes.</li>
+<li>Mention <code>EXPLAIN</code> and the slow query log as how you'd verify.</li>
 </ul>
 """),
 # ---------------------------------------------------------------------------
@@ -411,12 +495,28 @@ drain time afterwards  = 3,560 ÷ (500 − 315) ≈ 19 s</div>
 <li><strong>Exactly once:</strong> in practice, at-least-once delivery plus <strong>idempotent</strong> processing. Give each message an id (for example an idempotency key from the client), and have the worker skip ids it has already processed, using a unique constraint in the same transaction as the write.</li>
 </ul>
 
+<h2>Kafka specifically</h2>
+<p>A Kafka <strong>topic</strong> is split into <strong>partitions</strong>. Each partition is an ordered, append-only log. The message key decides which partition a message lands in, so all messages with the same key stay in order.</p>
+{diagram([[B("PRODUCER", "key = order_id")], [B("PARTITION 0", ""), B("PARTITION 1", ""), B("PARTITION 2", ""), B("PARTITION 3", "")], [B("CONSUMER A", "P0", True), B("CONSUMER B", "P1", True), B("CONSUMER C", "P2", True), B("CONSUMER D", "P3", True), B("CONSUMER E", "idle")]],
+         "One consumer group with four partitions and five consumers. Each partition goes to exactly one consumer, so the fifth gets nothing.",
+         edges=[None, [(0, 0), (1, 1), (2, 2), (3, 3)]])}
+<h3>Consumer groups set your parallelism</h3>
+<p>Consumers that share a <code>group.id</code> split the partitions between them, and each partition is read by exactly one consumer in the group. So <strong>the partition count is the maximum parallelism</strong> for a group: with 12 partitions, a 13th consumer gets nothing to do. Separate groups each read the whole topic independently, which is how one event feeds billing, search and analytics at the same time.</p>
+<p>Choose the partition count with headroom. Adding partitions later changes which partition each key maps to, which breaks per-key ordering for messages in flight. When consumers join or leave, the group <strong>rebalances</strong> and briefly pauses consumption.</p>
+<h3>What Kafka actually guarantees</h3>
+{table(["You get", "When"], [
+    ["At most once", "The consumer commits its offset <em>before</em> processing. A crash after the commit skips the message."],
+    ["At least once (the usual default)", "The consumer commits <em>after</em> processing. A crash before the commit means the message is processed again."],
+    ["Exactly once, inside Kafka", "Idempotent producers (on by default since Kafka 3.0) drop duplicates caused by retries, and transactions commit the output messages and the consumer offsets together. This covers reading from Kafka, processing, and writing back to Kafka."],
+])}
+<p>Exactly-once stops at Kafka's edge. If your consumer charges a card or writes to Postgres, a crash between that side effect and the offset commit still repeats it. You still need an idempotency key in the external system.</p>
+
 <h2>When things go wrong</h2>
 <ul>
 <li><strong>Retries with exponential backoff and jitter:</strong> wait 1 s, 2 s, 4 s and so on, with randomness so retries don't arrive in synchronised waves.</li>
-<li><strong>Dead-letter queue:</strong> after N failed attempts, move the message aside for a person to inspect, so one bad message can't block the queue.</li>
+<li><strong>Dead-letter queue:</strong> after N failed attempts, or on an error that can never succeed (such as a malformed payload), move the message aside so it can't block the queue. Someone has to own draining it: alert when it isn't empty, fix the cause, then replay the messages.</li>
 <li><strong>Visibility timeout:</strong> a message being processed is hidden from other workers until it's acknowledged or the timeout expires.</li>
-<li><strong>Backpressure:</strong> when the queue is too deep, slow producers down or reject new work (HTTP 429 or 503) rather than buffering without limit.</li>
+<li><strong>Backpressure:</strong> when consumers fall behind, you can add consumers (up to the partition count), make each message cheaper (for example by batching database writes), slow producers down, reject new work (HTTP 429 or 503), or shed low-priority work. Buffering without limit only delays the failure.</li>
 <li><strong>Outbox pattern:</strong> write the business row and an "outbox" row in one database transaction, then publish from the outbox. This avoids "saved but never published" and "published but never saved".</li>
 </ul>
 
@@ -430,6 +530,7 @@ drain time afterwards  = 3,560 ÷ (500 − 315) ≈ 19 s</div>
 <li>Say which work becomes asynchronous and what the user sees meanwhile.</li>
 <li>Size workers above the average arrival rate, and the queue for the burst.</li>
 <li>State the delivery guarantee and how processing stays idempotent.</li>
+<li>Pick a partition key for ordering and enough partitions for parallelism.</li>
 <li>Cover retries, the dead-letter queue and backpressure.</li>
 <li>Choose a queue or a log and explain why.</li>
 </ul>
